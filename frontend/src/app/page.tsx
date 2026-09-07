@@ -30,16 +30,6 @@ export default function Home() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [watchlist, setWatchlist] = useState<string[]>(WATCHLIST);
 
-  useEffect(() => {
-    try {
-      const saved = window.localStorage.getItem("market-memory-watchlist");
-      if (saved) {
-        const parsed = JSON.parse(saved) as unknown;
-        if (Array.isArray(parsed)) setWatchlist(parsed.filter((item): item is string => WATCHLIST.includes(item)));
-      }
-    } catch { /* Keep defaults. */ }
-  }, []);
-
   function selectSymbol(value: string) { setSymbol(value); setData(null); setError(""); }
 
   function toggleWatchlist(value: string) {
