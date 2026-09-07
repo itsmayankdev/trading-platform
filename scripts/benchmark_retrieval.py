@@ -52,22 +52,22 @@ def benchmark_numerical(candles, pattern_length, top_k, expected, current_start_
     starts = store.window_start_times()
     ends = store.window_end_times()
 
-    # normalized_close_matrix() contains one row for every sliding window,
-    # including the current window. starts/ends describe only historical rows.
+    # Keep the numerical matrix and timestamp arrays on the same row domain.
+    # The final matrix row is the current window; starts/ends cover historical rows.
     historical_matrix_all = matrix[:-1]
-    historical_starts = starts
-    historical_ends = ends
+    historical_starts_all = starts
+    historical_ends_all = ends
 
     # Exact match to the PatternWindow rule: historical window END
     # must be strictly before the current window START.
-    eligible = historical_ends < current_start_time
+    eligible = historical_ends_all < current_start_time
     historical_matrix = historical_matrix_all[eligible]
-    historical_starts = historical_starts[eligible]
+    historical_starts = historical_starts_all[eligible]
     current_path = matrix[-1]
 
     distances = np.sqrt(np.mean((historical_matrix - current_path) ** 2, axis=1))
     scores = np.exp(-distances * 10.0).clip(0.0, 1.0)
-    order = np.argsort(scores)[::-1][:top_k]
+    order = np.argsort(-scores, kind="stable")[:top_k]
     scoring_seconds = time.perf_counter() - t0
 
     actual_times = [str(historical_starts[int(i)]) for i in order]
