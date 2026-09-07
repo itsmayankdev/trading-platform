@@ -4,6 +4,7 @@ from pathlib import Path
 
 from workers.ingestion.instrument_registry import InstrumentRegistrySync
 from workers.ingestion.planner import IngestionPlan, IngestionPlanner
+from market_data.providers.binance_tickers import BinanceTickerProvider
 
 
 DEFAULT_POLICY_PATH = Path(__file__).resolve().parents[2] / "config" / "ingestion_policy.json"
@@ -14,6 +15,7 @@ class Tier:
     name: str
     priority: int
     symbols: frozenset[str]
+    top_by_quote_volume: int | None
     history_days: int
 
 
@@ -29,6 +31,11 @@ class IngestionScheduler:
                 name=item["name"],
                 priority=int(item["priority"]),
                 symbols=frozenset(symbol.upper() for symbol in item.get("symbols", [])),
+                top_by_quote_volume=(
+                    int(item["top_by_quote_volume"])
+                    if item.get("top_by_quote_volume") is not None
+                    else None
+                ),
                 history_days=int(item["history_days"]),
             )
             for item in config.get("tiers", [])
@@ -42,17 +49,41 @@ class IngestionScheduler:
         registry = InstrumentRegistrySync()
         discovery = registry.sync()
 
+        ticker_map = {
+            ticker.symbol: ticker.quote_volume
+            for ticker in BinanceTickerProvider().get_24h_tickers()
+        }
+        eligible_symbols = self._eligible_symbols()
+
         plans: list[tuple[int, IngestionPlan]] = []
+        assigned_symbols: set[str] = set()
+
         for tier in sorted(self.tiers, key=lambda item: item.priority):
+            symbols = set(tier.symbols)
+            if tier.top_by_quote_volume is not None:
+                ranked = sorted(
+                    (
+                        (symbol, ticker_map.get(symbol, 0.0))
+                        for symbol in eligible_symbols
+                        if symbol not in assigned_symbols
+                    ),
+                    key=lambda item: item[1],
+                    reverse=True,
+                )
+                symbols.update(symbol for symbol, _ in ranked[: tier.top_by_quote_volume])
+
+            symbols &= eligible_symbols
+            symbols -= assigned_symbols
+            assigned_symbols.update(symbols)
+
             planner = IngestionPlanner(
                 timeframes=self.timeframes,
                 history_days=tier.history_days,
             )
-            tier_plans = planner.build_plans()
-
-            if tier.symbols:
-                tier_plans = [plan for plan in tier_plans if plan.symbol in tier.symbols]
-
+            tier_plans = [
+                plan for plan in planner.build_plans()
+                if plan.symbol in symbols
+            ]
             plans.extend((tier.priority, plan) for plan in tier_plans)
 
         plans.sort(key=lambda item: (item[0], item[1].symbol, item[1].timeframe, item[1].reason))
@@ -67,6 +98,25 @@ class IngestionScheduler:
             "selected": len(selected),
             "queued": queued,
         }
+
+    @staticmethod
+    def _eligible_symbols() -> set[str]:
+        from sqlalchemy import text
+        from backend.app.db.session import SessionLocal
+
+        with SessionLocal() as db:
+            rows = db.execute(
+                text(
+                    """
+                    SELECT symbol
+                    FROM instruments
+                    WHERE is_enabled = TRUE
+                      AND exchange = 'binance'
+                      AND provider = 'binance'
+                    """
+                )
+            ).scalars().all()
+        return {str(symbol).upper() for symbol in rows}
 
 
 def main() -> None:
