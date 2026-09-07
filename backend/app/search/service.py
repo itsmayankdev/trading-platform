@@ -6,7 +6,7 @@ from sqlalchemy import select
 from backend.app.db.session import SessionLocal
 from backend.app.models.candle import Candle
 
-from pattern_engine.retrieval.numerical import build_numerical_store
+from pattern_engine.retrieval.numerical import NumericalWindowStore
 from pattern_engine.window import CandlePoint, PatternWindow
 from pattern_engine.ranking import PatternRanker
 from pattern_engine.outcomes import calculate_outcomes
@@ -49,8 +49,15 @@ class PatternSearchService:
             ).all()
         mark("db_load", started)
 
+        if len(rows) < pattern_length + 1:
+            raise ValueError("Not enough candles to perform pattern search")
+
+        timestamps = [row.timestamp for row in rows]
+        closes = [row.close for row in rows]
+        timestamp_to_index = {timestamp: index for index, timestamp in enumerate(timestamps)}
+
         started = time.perf_counter()
-        candles = [
+        current_candles = [
             CandlePoint(
                 timestamp=row.timestamp,
                 open=row.open,
@@ -59,25 +66,24 @@ class PatternSearchService:
                 close=row.close,
                 volume=row.volume,
             )
-            for row in rows
+            for row in rows[-pattern_length:]
         ]
-        mark("candle_conversion", started)
+        mark("current_candle_conversion", started)
 
-        if len(candles) < pattern_length + 1:
-            raise ValueError("Not enough candles to perform pattern search")
-
-        started = time.perf_counter()
         current = PatternWindow(
             symbol=symbol,
             timeframe=timeframe,
-            start_time=candles[-pattern_length].timestamp,
-            end_time=candles[-1].timestamp,
-            candles=tuple(candles[-pattern_length:]),
+            start_time=current_candles[0].timestamp,
+            end_time=current_candles[-1].timestamp,
+            candles=tuple(current_candles),
         )
-        mark("current_window", started)
 
         started = time.perf_counter()
-        store = build_numerical_store(candles, pattern_length)
+        store = NumericalWindowStore.from_columns(
+            timestamps=timestamps,
+            closes=closes,
+            window_length=pattern_length,
+        )
         mark("numerical_store", started)
 
         started = time.perf_counter()
@@ -93,24 +99,42 @@ class PatternSearchService:
         started = time.perf_counter()
         match_results = []
         all_outcomes = []
-        timestamp_to_index = {
-            candle.timestamp: index for index, candle in enumerate(candles)
-        }
+        max_horizon = 60
 
         for match in matches:
             start_index = timestamp_to_index[match.start_time]
+            matched_rows = rows[start_index : start_index + pattern_length]
             matched_window = PatternWindow(
                 symbol=symbol,
                 timeframe=timeframe,
                 start_time=match.start_time,
                 end_time=match.end_time,
-                candles=tuple(candles[start_index : start_index + pattern_length]),
+                candles=tuple(
+                    CandlePoint(
+                        timestamp=row.timestamp,
+                        open=row.open,
+                        high=row.high,
+                        low=row.low,
+                        close=row.close,
+                        volume=row.volume,
+                    )
+                    for row in matched_rows
+                ),
             )
 
+            future_rows = rows[
+                start_index + pattern_length : start_index + pattern_length + max_horizon
+            ]
             future = [
-                candle
-                for candle in candles
-                if candle.timestamp > matched_window.end_time
+                CandlePoint(
+                    timestamp=row.timestamp,
+                    open=row.open,
+                    high=row.high,
+                    low=row.low,
+                    close=row.close,
+                    volume=row.volume,
+                )
+                for row in future_rows
             ]
 
             outcomes = calculate_outcomes(
@@ -171,7 +195,7 @@ class PatternSearchService:
             print(
                 "PATTERN_SEARCH_PROFILE "
                 + " ".join(f"{name}={value:.4f}s" for name, value in timings.items())
-                + f" total_stages={total:.4f}s candles={len(candles)}"
+                + f" total_stages={total:.4f}s candles={len(rows)}"
             )
 
         return response
