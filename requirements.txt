@@ -1,0 +1,12 @@
+fastapi==0.141.1
+uvicorn[standard]==0.52.4
+SQLAlchemy==2.0.52
+psycopg[binary]==3.3.5
+httpx==0.28.1
+pydantic==2.13.5
+pydantic-settings==2.15.0
+python-dotenv==1.2.3
+polars==1.44.1
+numpy==2.5.3
+redis==8.1.0
+PyYAML==6.0.3
