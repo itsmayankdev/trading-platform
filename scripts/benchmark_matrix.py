@@ -2,7 +2,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from dataclasses import dataclass
+from pathlib import Path
+
+# Make the repository root importable when this file is executed directly.
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 import numpy as np
 from sqlalchemy import select
@@ -142,13 +149,13 @@ def benchmark(symbol, timeframe, args, horizons):
     algorithms = {"similarity_v1": SimilarityV1(), "similarity_v2": SimilarityV2()}
     results = {name: [] for name in algorithms}
 
+    timestamp_to_index = {c.timestamp: i for i, c in enumerate(candles)}
     for anchor in anchors:
         current_index = anchor - args.pattern_length + 1
         current = windows[current_index]
         historical = windows[:current_index]
         for name, algorithm in algorithms.items():
             matches = rank_matches(algorithm, current, historical, args.top_k, args.pattern_length, spacing)
-            timestamp_to_index = {c.timestamp: i for i, c in enumerate(candles)}
             for match, score in matches:
                 match_index = timestamp_to_index[match.start_time]
                 result = outcome(candles, match_index + args.pattern_length - 1, score, horizons)
