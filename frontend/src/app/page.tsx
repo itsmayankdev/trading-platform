@@ -26,6 +26,7 @@ export default function Home() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [watchlist, setWatchlist] = useState<string[]>(WATCHLIST);
   const [liveQuote, setLiveQuote] = useState<LiveQuote | null>(null);
+  const [highlightLocked, setHighlightLocked] = useState(true);
 
   function selectSymbol(value: string) {
     setSymbol(value); setData(null); setError(""); setLiveQuote(null);
@@ -106,7 +107,12 @@ export default function Home() {
               <div className="flex items-center gap-2 pr-3 text-[10px] font-semibold uppercase tracking-[0.12em] text-white/45"><span className="h-1.5 w-1.5 rounded-full bg-emerald-400" /> {symbol.replace("USDT", "/USDT")}</div>
               <div className="h-4 w-px bg-white/8" />
               <div className="flex items-baseline gap-2"><span className="font-mono text-base font-semibold tabular-nums">{liveQuote ? formatPrice(liveQuote.price) : "—"}</span><span className={`font-mono text-[10px] tabular-nums ${liveQuote && liveQuote.change >= 0 ? "text-emerald-400" : "text-rose-400"}`}>{liveQuote ? `${liveQuote.change >= 0 ? "+" : ""}${liveQuote.change.toFixed(2)}%` : "Updating…"}</span></div>
-              <div className="hidden h-4 w-px bg-white/8 sm:block" /><div className="hidden text-[9px] uppercase tracking-[0.1em] text-white/20 sm:block">Live price · auto refresh 10s</div>
+              <div className="h-4 w-px bg-white/8" />
+              <label className="flex cursor-pointer items-center gap-2 text-[9px] font-semibold uppercase tracking-[0.12em] text-white/45" title="HLT highlights the matched candles and locks both charts in place for reference">
+                <input type="checkbox" checked={highlightLocked} onChange={(event) => setHighlightLocked(event.target.checked)} className="h-3.5 w-3.5 accent-amber-300" />
+                <span>HLT</span>
+              </label>
+              <span className="hidden text-[9px] uppercase tracking-[0.1em] text-white/20 sm:inline">{highlightLocked ? "Highlight locked · charts fixed" : "Highlight off · charts movable"}</span>
             </div>
           </div>
 
@@ -116,10 +122,10 @@ export default function Home() {
             {data && <div className="space-y-3">
               <section className="grid grid-cols-2 gap-3">
                 <section className="panel overflow-hidden">
-                  <div className="flex h-12 items-center justify-between border-b border-white/8 px-3.5"><div><div className="text-[9px] font-semibold uppercase tracking-[0.14em] text-white/35">Current market</div><div className="mt-0.5 text-xs font-semibold">{data.symbol.replace("USDT", "/USDT")} <span className="text-white/20">·</span> {data.timeframe}</div></div><div className="font-mono text-[10px] text-white/30">{data.pattern_length} candles</div></div>
-                  <MarketChart symbol={data.symbol} timeframe={data.timeframe} patternLength={data.pattern_length} />
+                  <div className="flex h-12 items-center justify-between border-b border-white/8 px-3.5"><div><div className="text-[9px] font-semibold uppercase tracking-[0.14em] text-white/35">Current market</div><div className="mt-0.5 text-xs font-semibold">{data.symbol.replace("USDT", "/USDT")} <span className="text-white/20">·</span> {data.timeframe}</div></div><div className="font-mono text-[10px] text-white/30">{data.pattern_length} matched candles</div></div>
+                  <MarketChart symbol={data.symbol} timeframe={data.timeframe} patternLength={data.pattern_length} highlightLocked={highlightLocked} />
                 </section>
-                <HistoricalPatternChart key={`${data.symbol}-${data.timeframe}-${data.pattern_length}`} symbol={data.symbol} timeframe={data.timeframe} patternLength={data.pattern_length} matches={data.matches} />
+                <HistoricalPatternChart key={`${data.symbol}-${data.timeframe}-${data.pattern_length}`} symbol={data.symbol} timeframe={data.timeframe} patternLength={data.pattern_length} matches={data.matches} highlightLocked={highlightLocked} />
               </section>
               <OutcomeStatistics statistics={data.statistics} />
               <footer className="flex flex-col gap-1 border-t border-white/6 py-3 text-[9px] uppercase tracking-[0.1em] text-white/18 sm:flex-row sm:items-center sm:justify-between"><span>Algorithm {data.algorithm_version} · Features {data.feature_version}</span><span>Historical outcomes do not guarantee future performance.</span></footer>
