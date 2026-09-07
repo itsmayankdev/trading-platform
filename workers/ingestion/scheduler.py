@@ -1,4 +1,6 @@
+import argparse
 import json
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -119,10 +121,47 @@ class IngestionScheduler:
         return {str(symbol).upper() for symbol in rows}
 
 
+def run_scheduler(interval_seconds: int, run_once: bool = False) -> None:
+    if interval_seconds < 60:
+        raise ValueError("interval_seconds must be >= 60")
+
+    scheduler = IngestionScheduler()
+    while True:
+        started = time.monotonic()
+        try:
+            result = scheduler.reconcile()
+            print(
+                "Scheduler reconciliation: "
+                + ", ".join(f"{key}={value}" for key, value in result.items()),
+                flush=True,
+            )
+        except Exception as exc:
+            # Keep the scheduler alive; the next cycle can recover from transient
+            # exchange/database/network failures.
+            print(f"Scheduler reconciliation failed: {exc}", flush=True)
+
+        if run_once:
+            return
+
+        elapsed = time.monotonic() - started
+        time.sleep(max(0.0, interval_seconds - elapsed))
+
+
 def main() -> None:
-    result = IngestionScheduler().reconcile()
-    for key, value in result.items():
-        print(f"{key.capitalize()}: {value}")
+    parser = argparse.ArgumentParser(description="Reconcile market instruments and ingestion jobs")
+    parser.add_argument(
+        "--once",
+        action="store_true",
+        help="Run one reconciliation cycle and exit",
+    )
+    parser.add_argument(
+        "--interval-seconds",
+        type=int,
+        default=300,
+        help="Seconds between reconciliation cycles (minimum 60)",
+    )
+    args = parser.parse_args()
+    run_scheduler(interval_seconds=args.interval_seconds, run_once=args.once)
 
 
 if __name__ == "__main__":
