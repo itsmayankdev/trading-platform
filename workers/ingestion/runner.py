@@ -13,6 +13,7 @@ class IngestionRunner:
     """Claim queued ingestion jobs safely and execute them with bounded concurrency."""
 
     STALE_AFTER_MINUTES = 15
+    RECOVERY_INTERVAL_SECONDS = 60
 
     def __init__(self, poll_seconds: int = 5) -> None:
         if poll_seconds < 1:
@@ -97,7 +98,15 @@ class IngestionRunner:
 
     def worker_loop(self, worker_number: int) -> None:
         print(f"Worker {worker_number} started.")
+        next_recovery = time.monotonic()
         while True:
+            now = time.monotonic()
+            if now >= next_recovery:
+                recovered = self.recover_stale_jobs()
+                if recovered:
+                    print(f"Recovered stale jobs: {recovered}")
+                next_recovery = now + self.RECOVERY_INTERVAL_SECONDS
+
             job_id = self.claim_next()
             if job_id is None:
                 time.sleep(self.poll_seconds)
