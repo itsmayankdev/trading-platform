@@ -50,12 +50,7 @@ class NumericalWindowStore:
         top_k: int,
         min_separation_candles: int,
     ) -> list[tuple[int, float]]:
-        """Return exact V1-ranked historical candle start indices and scores.
-
-        This keeps retrieval entirely in the numerical representation. The
-        returned indices refer directly to the original candle array, so the
-        caller can materialize PatternWindow objects only for selected matches.
-        """
+        """Return exact V1-ranked historical candle start indices and scores."""
         if top_k <= 0:
             return []
 
@@ -67,7 +62,7 @@ class NumericalWindowStore:
 
         eligible = np.asarray(ends < current_start_time, dtype=bool)
         matrix = matrix[eligible]
-        eligible_start_indices = np.flatnonzero(eligible)
+        original_indices = np.flatnonzero(eligible)
         starts = starts[eligible]
 
         if len(matrix) == 0:
@@ -76,29 +71,28 @@ class NumericalWindowStore:
         current_path = self.current_normalized_path()
         distances = np.sqrt(np.mean((matrix - current_path) ** 2, axis=1))
         scores = np.exp(-distances * 10.0).clip(0.0, 1.0)
-
-        # Stable descending order preserves chronological candidate order for
-        # equal scores, matching PatternRanker's stable Python sort.
         ranked = np.argsort(-scores, kind="stable")
 
-        separation = None
+        minimum_separation = None
         if len(starts) >= 2:
             spacing = starts[1] - starts[0]
-            separation = spacing * min_separation_candles
+            minimum_separation = spacing * min_separation_candles
 
         selected: list[tuple[int, float]] = []
-        for rank_index in ranked:
-            index = int(rank_index)
-            start_index = int(eligible_start_indices[index])
-            candidate_start = starts[index]
+        selected_positions: list[int] = []
 
-            if separation is not None and any(
-                abs(candidate_start - starts[selected_index]) < separation
-                for selected_index, _ in selected
+        for rank_index in ranked:
+            position = int(rank_index)
+            candidate_start = starts[position]
+
+            if minimum_separation is not None and any(
+                abs(candidate_start - starts[selected_position]) < minimum_separation
+                for selected_position in selected_positions
             ):
                 continue
 
-            selected.append((start_index, float(scores[index])))
+            selected.append((int(original_indices[position]), float(scores[position])))
+            selected_positions.append(position)
             if len(selected) >= top_k:
                 break
 
