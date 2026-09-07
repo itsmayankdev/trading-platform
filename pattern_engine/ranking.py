@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from pattern_engine.registry import get_algorithm
+from pattern_engine.retrieval.numerical import NumericalWindowStore
 from pattern_engine.window import PatternWindow
 
 
@@ -77,3 +78,32 @@ class PatternRanker:
                 break
 
         return selected
+
+    def rank_numerical_v1(
+        self,
+        current: PatternWindow,
+        store: NumericalWindowStore,
+        top_k: int = 10,
+        min_separation_candles: int | None = None,
+    ) -> list[RankedMatch]:
+        """Rank directly from the compact numerical V1 representation."""
+        if self.algorithm.version != "similarity_v1":
+            raise ValueError("Numerical retrieval currently supports similarity_v1 only")
+        if top_k <= 0:
+            return []
+
+        separation = min_separation_candles or current.length
+        ranked = store.rank_v1(
+            current_start_time=current.start_time,
+            top_k=top_k,
+            min_separation_candles=separation,
+        )
+
+        return [
+            RankedMatch(
+                start_time=store.timestamps[start_index],
+                end_time=store.timestamps[start_index + store.window_length - 1],
+                similarity_score=score,
+            )
+            for start_index, score in ranked
+        ]
