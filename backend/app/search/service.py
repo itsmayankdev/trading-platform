@@ -33,13 +33,20 @@ class PatternSearchService:
         started = time.perf_counter()
         with SessionLocal() as db:
             rows = db.execute(
-                select(Candle)
+                select(
+                    Candle.timestamp,
+                    Candle.open,
+                    Candle.high,
+                    Candle.low,
+                    Candle.close,
+                    Candle.volume,
+                )
                 .where(
                     Candle.instrument_id == instrument_id,
                     Candle.timeframe == timeframe,
                 )
                 .order_by(Candle.timestamp.asc())
-            ).scalars().all()
+            ).all()
         mark("db_load", started)
 
         started = time.perf_counter()
