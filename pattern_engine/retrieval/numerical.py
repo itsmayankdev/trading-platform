@@ -21,6 +21,28 @@ class NumericalWindowStore:
         self.window_length = window_length
         self.window_count = len(candles) - window_length + 1
 
+    @classmethod
+    def from_columns(
+        cls,
+        timestamps: list[datetime],
+        closes: list[float],
+        window_length: int,
+    ) -> "NumericalWindowStore":
+        """Build the numerical store directly from database columns."""
+        if window_length <= 0:
+            raise ValueError("window_length must be positive")
+        if len(timestamps) != len(closes):
+            raise ValueError("timestamps and closes must have the same length")
+        if len(closes) < window_length:
+            raise ValueError("Not enough candles for requested window length")
+
+        store = cls.__new__(cls)
+        store.timestamps = np.asarray(timestamps, dtype=object)
+        store.close = np.asarray(closes, dtype=np.float64)
+        store.window_length = window_length
+        store.window_count = len(closes) - window_length + 1
+        return store
+
     def normalized_close_matrix(self) -> np.ndarray:
         windows = np.lib.stride_tricks.sliding_window_view(
             self.close, self.window_length
