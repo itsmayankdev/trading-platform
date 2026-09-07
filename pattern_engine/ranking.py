@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from datetime import datetime
 
-from pattern_engine.algorithms.v1 import SimilarityV1
+from pattern_engine.registry import get_algorithm
 from pattern_engine.window import PatternWindow
 
 
@@ -14,8 +14,8 @@ class RankedMatch:
 
 class PatternRanker:
 
-    def __init__(self):
-        self.algorithm = SimilarityV1()
+    def __init__(self, algorithm_version: str | None = None):
+        self.algorithm = get_algorithm(algorithm_version)
 
     def rank(
         self,
@@ -24,7 +24,6 @@ class PatternRanker:
         top_k: int = 10,
         min_separation_candles: int | None = None,
     ) -> list[RankedMatch]:
-
         candidates = [
             window
             for window in historical_windows
@@ -48,28 +47,20 @@ class PatternRanker:
         if min_separation_candles is None:
             min_separation_candles = current.length
 
-        # Pattern windows are built from consecutive candles. Use the first
-        # two historical starts to infer the candle interval. This preserves
-        # the existing cooldown semantics while avoiding overlapping matches.
         if len(historical_windows) >= 2:
-            timestamps = sorted(
-                window.start_time
-                for window in historical_windows
-            )
+            timestamps = sorted(window.start_time for window in historical_windows)
             spacing = timestamps[1] - timestamps[0]
             minimum_separation = spacing * min_separation_candles
         else:
             minimum_separation = None
 
         selected: list[RankedMatch] = []
-
         for index in ranked_indices:
             candidate = candidates[index]
 
             if minimum_separation is not None:
                 too_close = any(
-                    abs(candidate.start_time - selected_match.start_time)
-                    < minimum_separation
+                    abs(candidate.start_time - selected_match.start_time) < minimum_separation
                     for selected_match in selected
                 )
                 if too_close:
@@ -82,7 +73,6 @@ class PatternRanker:
                     similarity_score=float(scores[index]),
                 )
             )
-
             if len(selected) >= top_k:
                 break
 
