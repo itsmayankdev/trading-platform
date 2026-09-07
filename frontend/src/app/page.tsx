@@ -1,65 +1,41 @@
 "use client";
 
-import MarketChart from "@/components/MarketChart";
 import { useEffect, useState } from "react";
-import type { ReactNode } from "react";
-import {
-  Activity,
-  BarChart3,
-  Clock3,
-  Database,
-  Search,
-  TrendingDown,
-  TrendingUp,
-} from "lucide-react";
+import { Activity, BarChart3, Database, ShieldCheck, Sparkles } from "lucide-react";
+import MarketChart from "@/components/MarketChart";
+import HistoricalMatches from "@/components/pattern-search/HistoricalMatches";
+import OutcomeStatistics from "@/components/pattern-search/OutcomeStatistics";
+import SearchControls from "@/components/pattern-search/SearchControls";
+import type { SearchResponse } from "@/components/pattern-search/types";
 
-type Outcome = {
-  horizon_candles: number;
-  forward_return: number;
-  mfe: number;
-  mae: number;
-};
+function SummaryCard({ label, value, detail, icon }: { label: string; value: string; detail: string; icon: React.ReactNode }) {
+  return (
+    <div className="panel p-4">
+      <div className="flex items-center justify-between">
+        <span className="text-[10px] font-medium uppercase tracking-[0.14em] text-white/30">{label}</span>
+        <span className="text-white/30">{icon}</span>
+      </div>
+      <div className="mt-3 text-xl font-semibold tracking-tight">{value}</div>
+      <div className="mt-1 truncate text-xs text-white/30">{detail}</div>
+    </div>
+  );
+}
 
-type Match = {
-  start_time: string;
-  end_time: string;
-  similarity_score: number;
-  outcomes: Outcome[];
-};
-
-type Statistic = {
-  horizon_candles: number;
-  sample_size: number;
-  mean_return: number;
-  median_return: number;
-  win_rate: number;
-  mean_mfe: number;
-  mean_mae: number;
-};
-
-type SearchResponse = {
-  symbol: string;
-  timeframe: string;
-  pattern_length: number;
-  algorithm_version: string;
-  feature_version: string;
-  current_pattern: {
-    start_time: string;
-    end_time: string;
-  };
-  matches: Match[];
-  statistics: Statistic[];
-};
-
-function pct(value: number) {
-  return `${value >= 0 ? "+" : ""}${(value * 100).toFixed(2)}%`;
+function formatDate(value: string) {
+  return new Intl.DateTimeFormat("en-GB", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: "UTC",
+  }).format(new Date(value));
 }
 
 export default function Home() {
   const [symbol, setSymbol] = useState("ETHUSDT");
   const [timeframe, setTimeframe] = useState("5m");
   const [patternLength, setPatternLength] = useState("45");
-
   const [data, setData] = useState<SearchResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -76,442 +52,120 @@ export default function Home() {
         pattern_length: patternLength,
         top_k: "10",
       });
-
-      const response = await fetch(
-        `/api/backend/api/v1/pattern-search?${params.toString()}`,
-        {
-          cache: "no-store",
-        }
-      );
+      const response = await fetch(`/api/backend/api/v1/pattern-search?${params.toString()}`, { cache: "no-store" });
 
       if (!response.ok) {
         let message = `API returned ${response.status}`;
-
         try {
           const body = await response.json();
-
-          if (body?.detail) {
-            message = body.detail;
-          }
+          if (body?.detail) message = body.detail;
         } catch {
-          // Ignore invalid error response.
+          // Keep the generic HTTP error.
         }
-
         setError(message);
         return;
       }
 
-      const result: SearchResponse = await response.json();
-
-      setData(result);
+      setData((await response.json()) as SearchResponse);
     } catch {
-      setError(
-        "Could not reach the Pattern Engine. Please check that FastAPI is running."
-      );
+      setError("Could not reach the Pattern Engine. Check that FastAPI is running.");
     } finally {
       setLoading(false);
     }
   }
 
   useEffect(() => {
-    const timer = window.setTimeout(() => {
-      void searchPatterns();
-    }, 0);
-
+    const timer = window.setTimeout(() => void searchPatterns(), 0);
     return () => window.clearTimeout(timer);
-
-    // Initial search only.
-    // User-triggered searches happen through the button.
+    // Initial search only. User-triggered searches use the button.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const currentPattern = data?.current_pattern;
+
   return (
-    <main className="min-h-screen bg-[#080b10] text-white">
-      {/* Header */}
-      <header className="border-b border-white/10 bg-[#0b0f15]/95">
-        <div className="mx-auto flex max-w-[1500px] items-center justify-between px-6 py-4">
+    <main className="min-h-screen bg-[#070a0f] text-white">
+      <header className="sticky top-0 z-20 border-b border-white/7 bg-[#070a0f]/90 backdrop-blur-xl">
+        <div className="mx-auto flex h-16 max-w-[1500px] items-center justify-between px-4 sm:px-6">
           <div className="flex items-center gap-3">
-            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-white text-black">
-              <Activity size={20} />
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-white/10 bg-white text-black shadow-lg shadow-white/5">
+              <Activity size={18} />
             </div>
-
             <div>
-              <div className="text-sm font-semibold tracking-wide">
-                MARKET MEMORY
-              </div>
-
-              <div className="text-[11px] text-white/40">
-                Historical Pattern Intelligence
-              </div>
+              <div className="text-sm font-semibold tracking-[0.08em]">MARKET MEMORY</div>
+              <div className="hidden text-[10px] uppercase tracking-[0.14em] text-white/30 sm:block">Historical pattern intelligence</div>
             </div>
           </div>
 
-          <div className="flex items-center gap-2 text-xs text-white/50">
-            <span className="h-2 w-2 rounded-full bg-emerald-400" />
-            Engine Online
+          <div className="flex items-center gap-2 rounded-full border border-emerald-400/15 bg-emerald-400/5 px-3 py-1.5 text-[10px] font-medium uppercase tracking-[0.12em] text-emerald-400">
+            <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+            Engine online
           </div>
         </div>
       </header>
 
-      <div className="mx-auto max-w-[1500px] px-6 py-6">
-        {/* Controls */}
-        <section className="rounded-xl border border-white/10 bg-[#0d1219] p-4">
-          <div className="mb-4 flex items-center gap-2">
-            <Search size={17} />
-            <h1 className="text-sm font-semibold">Pattern Search</h1>
+      <div className="mx-auto max-w-[1500px] px-4 py-6 sm:px-6 sm:py-8">
+        <section className="mb-6 grid gap-5 lg:grid-cols-[1fr_auto] lg:items-end">
+          <div>
+            <div className="eyebrow flex items-center gap-2"><Sparkles size={13} /> Market Memory Engine</div>
+            <h1 className="mt-2 max-w-3xl text-3xl font-semibold tracking-[-0.03em] sm:text-4xl">Find where today&apos;s market pattern has happened before.</h1>
+            <p className="mt-3 max-w-2xl text-sm leading-6 text-white/40">Compare the latest price structure against historical windows and inspect what followed those matches.</p>
           </div>
-
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
-            {/* Symbol */}
-            <label className="text-xs text-white/50">
-              Symbol
-
-              <select
-                value={symbol}
-                onChange={(e) => {
-                  setSymbol(e.target.value);
-                  setData(null);
-                  setError("");
-                }}
-                className="mt-1 w-full rounded-lg border border-white/10 bg-[#080b10] px-3 py-2.5 text-sm text-white outline-none"
-              >
-                <option value="ETHUSDT">ETHUSDT</option>
-                <option value="BTCUSDT">BTCUSDT</option>
-                <option value="SOLUSDT">SOLUSDT</option>
-              </select>
-            </label>
-
-            {/* Timeframe */}
-            <label className="text-xs text-white/50">
-              Timeframe
-
-              <select
-                value={timeframe}
-                onChange={(e) => {
-                  setTimeframe(e.target.value);
-                  setData(null);
-                  setError("");
-                }}
-                className="mt-1 w-full rounded-lg border border-white/10 bg-[#080b10] px-3 py-2.5 text-sm text-white outline-none"
-              >
-                <option value="5m">5m</option>
-                <option value="15m">15m</option>
-                <option value="1h">1h</option>
-              </select>
-            </label>
-
-            {/* Pattern Length */}
-            <label className="text-xs text-white/50">
-              Pattern Length
-
-              <select
-                value={patternLength}
-                onChange={(e) => {
-                  setPatternLength(e.target.value);
-                  setData(null);
-                  setError("");
-                }}
-                className="mt-1 w-full rounded-lg border border-white/10 bg-[#080b10] px-3 py-2.5 text-sm text-white outline-none"
-              >
-                <option value="20">20 candles</option>
-                <option value="30">30 candles</option>
-                <option value="45">45 candles</option>
-                <option value="60">60 candles</option>
-                <option value="90">90 candles</option>
-              </select>
-            </label>
-
-            {/* Search Button */}
-            <div className="flex items-end">
-              <button
-                onClick={searchPatterns}
-                disabled={loading}
-                className="flex w-full items-center justify-center gap-2 rounded-lg bg-white px-4 py-2.5 text-sm font-semibold text-black transition hover:bg-white/90 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                <Search size={16} />
-
-                {loading ? "Searching..." : "Search Market Memory"}
-              </button>
-            </div>
-          </div>
+          <div className="hidden items-center gap-2 text-xs text-white/30 lg:flex"><ShieldCheck size={14} /> Server-side analysis</div>
         </section>
 
-        {/* Error */}
-        {error && (
-          <div className="mt-4 rounded-xl border border-red-500/20 bg-red-500/5 px-4 py-3 text-sm text-red-300">
-            {error}
-          </div>
+        <SearchControls
+          symbol={symbol}
+          timeframe={timeframe}
+          patternLength={patternLength}
+          loading={loading}
+          onSymbolChange={(value) => { setSymbol(value); setData(null); setError(""); }}
+          onTimeframeChange={(value) => { setTimeframe(value); setData(null); setError(""); }}
+          onPatternLengthChange={(value) => { setPatternLength(value); setData(null); setError(""); }}
+          onSearch={() => void searchPatterns()}
+        />
+
+        {error && <div className="mt-4 rounded-xl border border-red-400/15 bg-red-400/5 px-4 py-3 text-sm text-red-300">{error}</div>}
+
+        {loading && !data && (
+          <section className="mt-5 grid gap-4 md:grid-cols-4">
+            {[1, 2, 3, 4].map((item) => <div key={item} className="panel h-28 animate-pulse bg-white/[0.02]" />)}
+          </section>
         )}
 
-        {/* Results */}
         {data && (
-          <>
-            {/* Summary Cards */}
-            <section className="mt-5 grid grid-cols-1 gap-4 md:grid-cols-4">
-              <InfoCard
-                icon={<BarChart3 size={17} />}
-                label="Market"
-                value={data.symbol}
-                subvalue={data.timeframe}
-              />
-
-              <InfoCard
-                icon={<Clock3 size={17} />}
-                label="Pattern"
-                value={`${data.pattern_length} candles`}
-                subvalue={data.algorithm_version}
-              />
-
-              <InfoCard
-                icon={<Database size={17} />}
-                label="Historical Matches"
-                value={`${data.matches.length}`}
-                subvalue="independent matches"
-              />
-
-              <InfoCard
-                icon={<Activity size={17} />}
-                label="Feature Version"
-                value={data.feature_version}
-                subvalue="server-side engine"
-              />
+          <div className="mt-5 space-y-5">
+            <section className="grid grid-cols-2 gap-3 md:grid-cols-4">
+              <SummaryCard label="Market" value={data.symbol} detail={`${data.timeframe} timeframe`} icon={<BarChart3 size={16} />} />
+              <SummaryCard label="Pattern" value={`${data.pattern_length} candles`} detail={data.algorithm_version} icon={<Activity size={16} />} />
+              <SummaryCard label="Matches" value={String(data.matches.length)} detail="independent historical windows" icon={<Database size={16} />} />
+              <SummaryCard label="Features" value={data.feature_version} detail="server-side feature set" icon={<ShieldCheck size={16} />} />
             </section>
 
-            {/* Current Market Chart */}
-            <section className="mt-5 rounded-xl border border-white/10 bg-[#0d1219]">
-              <div className="flex items-center justify-between border-b border-white/10 px-5 py-4">
+            <section className="panel overflow-hidden">
+              <div className="flex flex-col gap-3 border-b border-white/8 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
                 <div>
-                  <h2 className="text-sm font-semibold">
-                    Current Market
-                  </h2>
-
-                  <p className="mt-1 text-xs text-white/40">
-                    {data.symbol} · {data.timeframe} ·{" "}
-                    {data.pattern_length} candle pattern
-                  </p>
+                  <div className="eyebrow">Current market</div>
+                  <h2 className="mt-1 text-lg font-semibold tracking-tight">{data.symbol} <span className="text-white/30">·</span> {data.timeframe}</h2>
+                  {currentPattern && <p className="mt-1 text-xs text-white/30">Pattern window {formatDate(currentPattern.start_time)} → {formatDate(currentPattern.end_time)} UTC</p>}
                 </div>
-
-                <span className="rounded-md border border-emerald-500/20 bg-emerald-500/5 px-2 py-1 text-[11px] text-emerald-400">
-                  Live Market Data
-                </span>
+                <div className="flex items-center gap-2 self-start rounded-lg border border-white/8 bg-white/[0.02] px-3 py-2 text-[10px] uppercase tracking-[0.12em] text-white/35 sm:self-auto">
+                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" /> Live market data
+                </div>
               </div>
-
-              <MarketChart
-                symbol={symbol}
-                timeframe={timeframe}
-                limit={Math.max(
-                  200,
-                  data.pattern_length + 50
-                )}
-              />
-
-              <div className="border-t border-white/10 px-5 py-3 text-xs text-white/35">
-                Pattern window:{" "}
-                {data.current_pattern.start_time} →{" "}
-                {data.current_pattern.end_time}
-              </div>
+              <MarketChart symbol={data.symbol} timeframe={data.timeframe} limit={Math.max(200, data.pattern_length + 50)} />
             </section>
 
-            {/* Historical Matches */}
-            <section className="mt-5 rounded-xl border border-white/10 bg-[#0d1219]">
-              <div className="border-b border-white/10 px-5 py-4">
-                <h2 className="text-sm font-semibold">
-                  Historical Matches
-                </h2>
+            <HistoricalMatches matches={data.matches} />
+            <OutcomeStatistics statistics={data.statistics} />
 
-                <p className="mt-1 text-xs text-white/40">
-                  Ranked by structural similarity
-                </p>
-              </div>
-
-              <div className="divide-y divide-white/5">
-                {data.matches.map((match, index) => (
-                  <div
-                    key={`${match.start_time}-${index}`}
-                    className="grid grid-cols-1 gap-3 px-5 py-4 md:grid-cols-[45px_1fr_150px_150px]"
-                  >
-                    <div className="text-sm font-medium text-white/40">
-                      #{index + 1}
-                    </div>
-
-                    <div>
-                      <div className="text-sm font-medium">
-                        {new Date(
-                          match.start_time
-                        ).toUTCString()}
-                      </div>
-
-                      <div className="mt-1 text-xs text-white/35">
-                        →{" "}
-                        {new Date(
-                          match.end_time
-                        ).toUTCString()}
-                      </div>
-                    </div>
-
-                    <div>
-                      <div className="text-[10px] uppercase tracking-wider text-white/35">
-                        Similarity Score
-                      </div>
-
-                      <div className="mt-1 text-lg font-semibold">
-                        {match.similarity_score.toFixed(2)}%
-                      </div>
-                    </div>
-
-                    <div>
-                      <div className="text-[10px] uppercase tracking-wider text-white/35">
-                        +30 Outcome
-                      </div>
-
-                      {match.outcomes.find(
-                        (x) => x.horizon_candles === 30
-                      ) ? (
-                        <div className="mt-1 flex items-center gap-1 text-sm">
-                          {(() => {
-                            const outcome =
-                              match.outcomes.find(
-                                (x) =>
-                                  x.horizon_candles === 30
-                              )!;
-
-                            return (
-                              <>
-                                {outcome.forward_return >=
-                                0 ? (
-                                  <TrendingUp
-                                    size={14}
-                                    className="text-emerald-400"
-                                  />
-                                ) : (
-                                  <TrendingDown
-                                    size={14}
-                                    className="text-red-400"
-                                  />
-                                )}
-
-                                {pct(
-                                  outcome.forward_return
-                                )}
-                              </>
-                            );
-                          })()}
-                        </div>
-                      ) : (
-                        <div className="mt-1 text-sm text-white/30">
-                          N/A
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </section>
-
-            {/* Statistics */}
-            <section className="mt-5 rounded-xl border border-white/10 bg-[#0d1219]">
-              <div className="border-b border-white/10 px-5 py-4">
-                <h2 className="text-sm font-semibold">
-                  Historical Outcome Statistics
-                </h2>
-
-                <p className="mt-1 text-xs text-white/40">
-                  Historical observations — not probability or
-                  prediction
-                </p>
-              </div>
-
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[800px] text-left text-sm">
-                  <thead className="border-b border-white/10 text-[11px] uppercase tracking-wider text-white/35">
-                    <tr>
-                      <th className="px-5 py-3">Horizon</th>
-                      <th className="px-5 py-3">Samples</th>
-                      <th className="px-5 py-3">Mean Return</th>
-                      <th className="px-5 py-3">
-                        Median Return
-                      </th>
-                      <th className="px-5 py-3">Win Rate</th>
-                      <th className="px-5 py-3">Avg MFE</th>
-                      <th className="px-5 py-3">Avg MAE</th>
-                    </tr>
-                  </thead>
-
-                  <tbody className="divide-y divide-white/5">
-                    {data.statistics.map((stat) => (
-                      <tr key={stat.horizon_candles}>
-                        <td className="px-5 py-4 font-medium">
-                          +{stat.horizon_candles}
-                        </td>
-
-                        <td className="px-5 py-4 text-white/60">
-                          {stat.sample_size}
-                        </td>
-
-                        <td className="px-5 py-4">
-                          {pct(stat.mean_return)}
-                        </td>
-
-                        <td className="px-5 py-4">
-                          {pct(stat.median_return)}
-                        </td>
-
-                        <td className="px-5 py-4">
-                          {(stat.win_rate * 100).toFixed(1)}%
-                        </td>
-
-                        <td className="px-5 py-4">
-                          {pct(stat.mean_mfe)}
-                        </td>
-
-                        <td className="px-5 py-4">
-                          {pct(stat.mean_mae)}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </section>
-
-            {/* Footer */}
-            <div className="mt-5 pb-8 text-center text-[11px] text-white/25">
-              Algorithm: {data.algorithm_version} · Features:{" "}
-              {data.feature_version} · Historical outcomes do not
-              guarantee future performance.
-            </div>
-          </>
+            <footer className="flex flex-col gap-2 border-t border-white/6 py-5 text-[10px] uppercase tracking-[0.12em] text-white/20 sm:flex-row sm:items-center sm:justify-between">
+              <span>Algorithm {data.algorithm_version} · Features {data.feature_version}</span>
+              <span>Historical outcomes do not guarantee future performance.</span>
+            </footer>
+          </div>
         )}
       </div>
     </main>
-  );
-}
-
-function InfoCard({
-  icon,
-  label,
-  value,
-  subvalue,
-}: {
-  icon: ReactNode;
-  label: string;
-  value: string;
-  subvalue: string;
-}) {
-  return (
-    <div className="rounded-xl border border-white/10 bg-[#0d1219] p-4">
-      <div className="flex items-center gap-2 text-xs text-white/40">
-        {icon}
-        {label}
-      </div>
-
-      <div className="mt-3 text-lg font-semibold">
-        {value}
-      </div>
-
-      <div className="mt-1 text-[11px] text-white/30">
-        {subvalue}
-      </div>
-    </div>
   );
 }
