@@ -2,11 +2,17 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from dataclasses import dataclass
-from datetime import datetime
+from pathlib import Path
 
 import numpy as np
 from sqlalchemy import select
+
+# Allow `python scripts/benchmark_similarity.py` from the repository root.
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from backend.app.db.session import SessionLocal
 from backend.app.models.candle import Candle
@@ -113,15 +119,28 @@ def rank_matches(
     min_separation: int,
 ) -> list[tuple[PatternWindow, float]]:
     candidates = [w for w in historical_windows if w.start_time != current.start_time]
+    if not candidates:
+        return []
+
     scores = algorithm.score_many(current, candidates)
     indices = np.argsort(scores)[::-1]
+
+    # Historical windows are consecutive candles, so infer the actual candle
+    # interval from the first two candidates rather than assuming a timeframe.
+    spacing = None
+    if len(candidates) >= 2:
+        starts = sorted(w.start_time for w in candidates[: min(len(candidates), 100)])
+        deltas = [b - a for a, b in zip(starts, starts[1:]) if b > a]
+        if deltas:
+            spacing = min(deltas)
+
+    minimum_separation = spacing * min_separation if spacing is not None else None
 
     selected: list[tuple[PatternWindow, float]] = []
     for index in indices:
         candidate = candidates[int(index)]
-        if any(
-            abs(candidate.start_time - selected_window.start_time)
-            < (candidate.start_time - candidate.start_time) + (current.end_time - current.start_time + (current.end_time - current.start_time) / max(current.length - 1, 1)) * min_separation
+        if minimum_separation is not None and any(
+            abs(candidate.start_time - selected_window.start_time) < minimum_separation
             for selected_window, _ in selected
         ):
             continue
@@ -165,9 +184,12 @@ def main() -> None:
         to_window(candles[i : i + args.pattern_length], args.symbol.upper(), args.timeframe)
         for i in range(len(candles) - args.pattern_length + 1)
     ]
+    start_by_timestamp = {window.start_time: i for i, window in enumerate(windows)}
 
     start_anchor = args.min_history + args.pattern_length - 1
-    anchor_indices = list(range(start_anchor, len(candles) - max(horizons), args.anchor_step))[-args.anchors :]
+    anchor_indices = list(
+        range(start_anchor, len(candles) - max(horizons), args.anchor_step)
+    )[-args.anchors :]
     if not anchor_indices:
         raise SystemExit("No valid walk-forward anchors")
 
@@ -188,8 +210,13 @@ def main() -> None:
                 args.pattern_length,
             )
             for match, score in matches:
-                match_start = next(i for i, c in enumerate(candles) if c.timestamp == match.start_time)
-                result = outcome(candles, match_start + args.pattern_length - 1, score, horizons)
+                match_start = start_by_timestamp[match.start_time]
+                result = outcome(
+                    candles,
+                    match_start + args.pattern_length - 1,
+                    score,
+                    horizons,
+                )
                 if result is not None:
                     all_results[name].append(result)
 
@@ -201,7 +228,10 @@ def main() -> None:
         "anchors_requested": args.anchors,
         "anchors_used": len(anchor_indices),
         "horizons": list(horizons),
-        "algorithms": {name: summarize(results, horizons) for name, results in all_results.items()},
+        "algorithms": {
+            name: summarize(results, horizons)
+            for name, results in all_results.items()
+        },
     }
     print(json.dumps(output, indent=2))
 
