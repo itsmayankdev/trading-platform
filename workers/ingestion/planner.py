@@ -76,8 +76,6 @@ class IngestionPlanner:
                         {"instrument_id": instrument["id"], "timeframe": timeframe},
                     ).mappings().one()
 
-                    # A queued job is already work in progress. Do not create a
-                    # second plan for the same symbol/timeframe while it waits.
                     active = db.execute(
                         text(
                             """
@@ -98,24 +96,24 @@ class IngestionPlanner:
                     max_timestamp = coverage["max_timestamp"]
 
                     if min_timestamp is None:
-                        plans.append(
-                            IngestionPlan(symbol, timeframe, desired_start, end, "no_data")
-                        )
+                        if desired_start < end:
+                            plans.append(
+                                IngestionPlan(symbol, timeframe, desired_start, end, "no_data")
+                            )
                         continue
 
-                    # Schedule the historical gap first. Incremental catch-up is
-                    # intentionally deferred until this job completes, preventing
-                    # two active jobs for the same symbol/timeframe.
                     if min_timestamp > desired_start:
-                        plans.append(
-                            IngestionPlan(
-                                symbol,
-                                timeframe,
-                                desired_start,
-                                min_timestamp,
-                                "historical_backfill",
+                        backfill_end = min(min_timestamp, end)
+                        if desired_start < backfill_end:
+                            plans.append(
+                                IngestionPlan(
+                                    symbol,
+                                    timeframe,
+                                    desired_start,
+                                    backfill_end,
+                                    "historical_backfill",
+                                )
                             )
-                        )
                         continue
 
                     if max_timestamp is None:
@@ -136,7 +134,7 @@ class IngestionPlanner:
         return plans
 
     def enqueue(self, plans: list[IngestionPlan]) -> int:
-        """Persist plans while relying on the database for concurrency safety."""
+        """Persist plans without racing on the active-job uniqueness constraint."""
         created = 0
         with SessionLocal() as db:
             for plan in plans:
