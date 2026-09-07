@@ -53,36 +53,33 @@ def benchmark_bruteforce(current, historical, top_k: int) -> tuple[list, float]:
 
 def benchmark_numerical(
     candles: list[CandlePoint],
-    symbol: str,
-    timeframe: str,
     pattern_length: int,
     top_k: int,
     expected: list,
 ) -> tuple[list, float, float]:
+    # Build the compact representation once; construction is measured separately.
+    t0 = time.perf_counter()
     store = build_numerical_store(candles, pattern_length)
-
-    current_path = store.current_normalized_path()
-    historical_matrix = store.historical_normalized_matrix()
-    start_times = store.window_start_times()
-
-    # Match the exact historical boundary used by the PatternWindow path.
-    current_start_time = store.current_start_time()
-    eligible = np.array(
-        [t < current_start_time for t in start_times[:-1]],
-        dtype=bool,
-    )
-    historical_matrix = historical_matrix[eligible]
-    historical_start_times = start_times[:-1][eligible]
+    build_seconds = time.perf_counter() - t0
 
     t0 = time.perf_counter()
+    current_path = store.current_normalized_path()
+    historical_matrix = store.historical_normalized_matrix()
+    start_times = store.window_start_times()[:-1]
+
+    current_start_time = store.current_start_time()
+    eligible = start_times < current_start_time
+    historical_matrix = historical_matrix[eligible]
+    historical_start_times = start_times[eligible]
+
     distances = np.sqrt(np.mean((historical_matrix - current_path) ** 2, axis=1))
     scores = np.exp(-distances * 10.0).clip(0.0, 1.0)
     order = np.argsort(scores)[::-1][:top_k]
-    elapsed = time.perf_counter() - t0
+    scoring_seconds = time.perf_counter() - t0
 
-    actual = [str(historical_start_times[int(i)]) for i in order]
+    actual_times = [str(historical_start_times[int(i)]) for i in order]
     expected_times = [str(m.window.start_time) for m in expected]
-    same_order = actual == expected_times
+    same_order = actual_times == expected_times
 
     max_score_error = 0.0
     if expected:
@@ -96,9 +93,8 @@ def benchmark_numerical(
             f"(same_order={same_order}, max_error={max_score_error:.3e})"
         )
 
-    # Numerical benchmark intentionally measures matrix scoring/ranking only.
-    # The store construction is excluded so representation cost is visible separately.
-    return expected, elapsed, max_score_error
+    # Returned timings are kept separate so we can see both costs.
+    return expected, build_seconds, scoring_seconds, max_score_error
 
 
 def main() -> None:
@@ -118,16 +114,15 @@ def main() -> None:
     historical = [w for w in windows if w.end_time < current.start_time]
 
     brute, brute_seconds = benchmark_bruteforce(current, historical, args.top_k)
-    numerical, numerical_seconds, max_score_error = benchmark_numerical(
+    numerical, build_seconds, numerical_seconds, max_score_error = benchmark_numerical(
         candles,
-        args.symbol,
-        args.timeframe,
         args.pattern_length,
         args.top_k,
         brute,
     )
 
     same_order = [m.window.start_time for m in brute] == [m.window.start_time for m in numerical]
+    total_numerical = build_seconds + numerical_seconds
 
     print(f"Dataset: {args.symbol} {args.timeframe}")
     print(f"Candles: {len(candles):,}")
@@ -135,12 +130,17 @@ def main() -> None:
     print(f"Pattern length: {args.pattern_length}")
     print(f"Top-K: {args.top_k}")
     print()
-    print(f"Brute-force: {brute_seconds:.6f}s")
-    print(f"Numerical:   {numerical_seconds:.6f}s")
+    print(f"Brute-force scoring: {brute_seconds:.6f}s")
+    print(f"Numerical build:     {build_seconds:.6f}s")
+    print(f"Numerical scoring:   {numerical_seconds:.6f}s")
+    print(f"Numerical total:     {total_numerical:.6f}s")
+    print()
     if numerical_seconds > 0:
-        print(f"Speedup:     {brute_seconds / numerical_seconds:.2f}x")
-    print(f"Same order:  {same_order}")
-    print(f"Max error:   {max_score_error:.3e}")
+        print(f"Scoring speedup:     {brute_seconds / numerical_seconds:.2f}x")
+    if total_numerical > 0:
+        print(f"End-to-end speedup:  {brute_seconds / total_numerical:.2f}x")
+    print(f"Same order:          {same_order}")
+    print(f"Max error:           {max_score_error:.3e}")
 
 
 if __name__ == "__main__":
