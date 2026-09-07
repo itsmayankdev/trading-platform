@@ -56,28 +56,26 @@ def benchmark_numerical(
     pattern_length: int,
     top_k: int,
     expected: list,
-) -> tuple[list, float, float]:
+) -> tuple[list, float, float, float]:
     # Build the compact representation once; construction is measured separately.
     t0 = time.perf_counter()
     store = build_numerical_store(candles, pattern_length)
     build_seconds = time.perf_counter() - t0
 
+    # The numerical store exposes one row per sliding window. The last row is
+    # the current window; all earlier rows are historical candidates.
     t0 = time.perf_counter()
-    current_path = store.current_normalized_path()
-    historical_matrix = store.historical_normalized_matrix()
+    matrix = store.normalized_close_matrix()
+    current_path = matrix[-1]
+    historical_matrix = matrix[:-1]
     start_times = store.window_start_times()[:-1]
-
-    current_start_time = store.current_start_time()
-    eligible = start_times < current_start_time
-    historical_matrix = historical_matrix[eligible]
-    historical_start_times = start_times[eligible]
 
     distances = np.sqrt(np.mean((historical_matrix - current_path) ** 2, axis=1))
     scores = np.exp(-distances * 10.0).clip(0.0, 1.0)
     order = np.argsort(scores)[::-1][:top_k]
     scoring_seconds = time.perf_counter() - t0
 
-    actual_times = [str(historical_start_times[int(i)]) for i in order]
+    actual_times = [str(start_times[int(i)]) for i in order]
     expected_times = [str(m.window.start_time) for m in expected]
     same_order = actual_times == expected_times
 
@@ -93,7 +91,6 @@ def benchmark_numerical(
             f"(same_order={same_order}, max_error={max_score_error:.3e})"
         )
 
-    # Returned timings are kept separate so we can see both costs.
     return expected, build_seconds, scoring_seconds, max_score_error
 
 
