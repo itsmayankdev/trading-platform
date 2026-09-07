@@ -14,6 +14,7 @@ if str(ROOT) not in sys.path:
 
 from backend.app.db.session import SessionLocal
 from backend.app.models.candle import Candle
+from backend.app.models.instrument import Instrument
 from pattern_engine.retrieval.bruteforce import BruteForceRetriever
 from pattern_engine.retrieval.numerical_v1 import NumericalV1Retriever
 from pattern_engine.retrieval.numerical import build_numerical_store
@@ -23,17 +24,25 @@ from pattern_engine.window_builder import build_windows
 
 def load_candles(symbol: str, timeframe: str) -> list[CandlePoint]:
     with SessionLocal() as db:
+        instrument_id = db.execute(
+            select(Instrument.id).where(Instrument.symbol == symbol)
+        ).scalar_one_or_none()
+        if instrument_id is None:
+            raise SystemExit(f"Unknown instrument: {symbol}")
+
         rows = db.execute(
             select(Candle)
             .where(
-                Candle.instrument_id.in_(
-                    select(Instrument.id).where(Instrument.symbol == symbol)
-                ),
+                Candle.instrument_id == instrument_id,
                 Candle.timeframe == timeframe,
             )
             .order_by(Candle.timestamp.asc())
         ).scalars().all()
-    return [CandlePoint(r.timestamp, r.open, r.high, r.low, r.close, r.volume) for r in rows]
+
+    return [
+        CandlePoint(r.timestamp, r.open, r.high, r.low, r.close, r.volume)
+        for r in rows
+    ]
 
 
 def main() -> None:
