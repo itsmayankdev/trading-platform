@@ -114,7 +114,11 @@ export default function Home() {
   }
 
   useEffect(() => {
-    void searchPatterns();
+    const timer = window.setTimeout(() => {
+      void searchPatterns();
+    }, 0);
+
+    return () => window.clearTimeout(timer);
 
     // Initial search only.
     // User-triggered searches happen through the button.
