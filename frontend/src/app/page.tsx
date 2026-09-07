@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Activity, Search, ShieldCheck } from "lucide-react";
+import { Activity } from "lucide-react";
 import MarketChart from "@/components/MarketChart";
 import Sidebar from "@/components/layout/Sidebar";
 import HistoricalPatternChart from "@/components/pattern-search/HistoricalPatternChart";
@@ -12,10 +12,7 @@ import type { SearchResponse } from "@/components/pattern-search/types";
 
 const WATCHLIST = ["BTCUSDT", "ETHUSDT", "SOLUSDT"];
 
-type LiveQuote = {
-  price: number;
-  change: number;
-};
+type LiveQuote = { price: number; change: number };
 
 function formatPrice(value: number) {
   return new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value);
@@ -41,11 +38,7 @@ export default function Home() {
   function toggleWatchlist(value: string) {
     setWatchlist((current) => {
       const next = current.includes(value) ? current.filter((item) => item !== value) : [...current, value];
-      try {
-        window.localStorage.setItem("market-memory-watchlist", JSON.stringify(next));
-      } catch {
-        /* Optional persistence. */
-      }
+      try { window.localStorage.setItem("market-memory-watchlist", JSON.stringify(next)); } catch { /* Optional persistence. */ }
       return next;
     });
   }
@@ -62,7 +55,7 @@ export default function Home() {
       if (latest == null) return;
       setLiveQuote({ price: latest, change: previous ? ((latest - previous) / previous) * 100 : 0 });
     } catch {
-      /* Keep the last known quote when the polling request fails. */
+      /* Keep the last known quote when polling fails. */
     }
   }
 
@@ -75,12 +68,7 @@ export default function Home() {
       const response = await fetch(`/api/backend/api/v1/pattern-search?${params.toString()}`, { cache: "no-store" });
       if (!response.ok) {
         let message = `API returned ${response.status}`;
-        try {
-          const body = await response.json();
-          if (body?.detail) message = body.detail;
-        } catch {
-          /* Generic error. */
-        }
+        try { const body = await response.json(); if (body?.detail) message = body.detail; } catch { /* Generic error. */ }
         setError(message);
         return;
       }
@@ -104,33 +92,23 @@ export default function Home() {
     void refreshLiveQuote();
     const timer = window.setInterval(() => void refreshLiveQuote(), 10000);
     return () => window.clearInterval(timer);
-    // Refresh whenever the selected instrument/timeframe changes.
+    // Refresh quote whenever the selected instrument/timeframe changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [symbol, timeframe]);
 
   return (
     <main className="min-h-screen bg-[#070a0f] text-white">
-      <header className="sticky top-0 z-40 h-12 border-b border-white/8 bg-[#070a0f]/98">
-        <div className="flex h-full items-center justify-between px-4 sm:px-5">
+      <header className="sticky top-0 z-40 h-12 border-b border-white/8 bg-[#070a0f]">
+        <div className="flex h-full items-center px-4 sm:px-5">
           <div className="flex items-center gap-2.5">
             <div className="flex h-7 w-7 items-center justify-center rounded-md bg-white text-black"><Activity size={15} /></div>
             <span className="text-xs font-semibold tracking-[0.12em]">MARKET MEMORY</span>
-          </div>
-          <div className="flex items-center gap-2 text-[9px] font-medium uppercase tracking-[0.12em] text-emerald-400/75">
-            <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" /> Engine online
           </div>
         </div>
       </header>
 
       <div className="flex">
-        <Sidebar
-          symbol={symbol}
-          collapsed={sidebarCollapsed}
-          onCollapsedChange={setSidebarCollapsed}
-          onSymbolSelect={selectSymbol}
-          selectedSymbols={watchlist}
-          onWatchlistToggle={toggleWatchlist}
-        />
+        <Sidebar symbol={symbol} collapsed={sidebarCollapsed} onCollapsedChange={setSidebarCollapsed} onSymbolSelect={selectSymbol} selectedSymbols={watchlist} onWatchlistToggle={toggleWatchlist} />
 
         <div className="min-w-0 flex-1">
           <SearchControls
@@ -146,18 +124,11 @@ export default function Home() {
 
           <div className="border-b border-white/7 bg-[#080c12] px-4 py-2 sm:px-5">
             <div className="flex items-center gap-4 overflow-x-auto whitespace-nowrap">
-              <div className="flex items-center gap-2 pr-3 text-[10px] font-semibold uppercase tracking-[0.12em] text-white/45">
-                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" /> {symbol.replace("USDT", "/USDT")}
-              </div>
+              <div className="flex items-center gap-2 pr-3 text-[10px] font-semibold uppercase tracking-[0.12em] text-white/45"><span className="h-1.5 w-1.5 rounded-full bg-emerald-400" /> {symbol.replace("USDT", "/USDT")}</div>
               <div className="h-4 w-px bg-white/8" />
-              <div className="flex items-baseline gap-2">
-                <span className="font-mono text-base font-semibold tabular-nums">{liveQuote ? formatPrice(liveQuote.price) : "—"}</span>
-                <span className={`font-mono text-[10px] tabular-nums ${liveQuote && liveQuote.change >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
-                  {liveQuote ? `${liveQuote.change >= 0 ? "+" : ""}${liveQuote.change.toFixed(2)}%` : "Updating…"}
-                </span>
-              </div>
+              <div className="flex items-baseline gap-2"><span className="font-mono text-base font-semibold tabular-nums">{liveQuote ? formatPrice(liveQuote.price) : "—"}</span><span className={`font-mono text-[10px] tabular-nums ${liveQuote && liveQuote.change >= 0 ? "text-emerald-400" : "text-rose-400"}`}>{liveQuote ? `${liveQuote.change >= 0 ? "+" : ""}${liveQuote.change.toFixed(2)}%` : "Updating…"}</span></div>
               <div className="hidden h-4 w-px bg-white/8 sm:block" />
-              <div className="hidden items-center gap-2 text-[9px] uppercase tracking-[0.1em] text-white/25 sm:flex"><ShieldCheck size={12} /> Live market data</div>
+              <div className="hidden text-[9px] uppercase tracking-[0.1em] text-white/20 sm:block">Live price · auto refresh 10s</div>
             </div>
           </div>
 
@@ -170,22 +141,13 @@ export default function Home() {
                 <section className="grid grid-cols-1 gap-3 lg:grid-cols-2">
                   <section className="panel overflow-hidden">
                     <div className="flex h-12 items-center justify-between border-b border-white/8 px-3.5">
-                      <div>
-                        <div className="text-[9px] font-semibold uppercase tracking-[0.14em] text-white/35">Current market</div>
-                        <div className="mt-0.5 text-xs font-semibold">{data.symbol.replace("USDT", "/USDT")} <span className="text-white/20">·</span> {data.timeframe}</div>
-                      </div>
+                      <div><div className="text-[9px] font-semibold uppercase tracking-[0.14em] text-white/35">Current market</div><div className="mt-0.5 text-xs font-semibold">{data.symbol.replace("USDT", "/USDT")} <span className="text-white/20">·</span> {data.timeframe}</div></div>
                       <div className="font-mono text-[10px] text-white/30">{data.pattern_length} candles</div>
                     </div>
                     <MarketChart symbol={data.symbol} timeframe={data.timeframe} limit={Math.max(100, data.pattern_length + 35)} />
                   </section>
 
-                  <HistoricalPatternChart
-                    key={`${data.symbol}-${data.timeframe}-${data.pattern_length}`}
-                    symbol={data.symbol}
-                    timeframe={data.timeframe}
-                    patternLength={data.pattern_length}
-                    matches={data.matches}
-                  />
+                  <HistoricalPatternChart key={`${data.symbol}-${data.timeframe}-${data.pattern_length}`} symbol={data.symbol} timeframe={data.timeframe} patternLength={data.pattern_length} matches={data.matches} />
                 </section>
 
                 <section className="grid gap-3 xl:grid-cols-[1.45fr_1fr]">
