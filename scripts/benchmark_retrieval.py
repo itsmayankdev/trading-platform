@@ -57,25 +57,31 @@ def benchmark_numerical(
     top_k: int,
     expected: list,
 ) -> tuple[list, float, float, float]:
-    # Build the compact representation once; construction is measured separately.
     t0 = time.perf_counter()
     store = build_numerical_store(candles, pattern_length)
     build_seconds = time.perf_counter() - t0
 
-    # The numerical store exposes one row per sliding window. The last row is
-    # the current window; all earlier rows are historical candidates.
     t0 = time.perf_counter()
     matrix = store.normalized_close_matrix()
-    current_path = matrix[-1]
-    historical_matrix = matrix[:-1]
-    start_times = store.window_start_times()[:-1]
+    start_times = store.window_start_times()
 
+    # Exact equivalent of the PatternWindow historical boundary:
+    # candidate window end must be before the current window start.
+    current_start_time = store.current_start_time()
+    current_index = store.window_count - 1
+    historical_indices = np.flatnonzero(
+        np.asarray(start_times < current_start_time, dtype=bool)
+    )
+    historical_matrix = matrix[historical_indices]
+    historical_start_times = start_times[historical_indices]
+
+    current_path = matrix[current_index]
     distances = np.sqrt(np.mean((historical_matrix - current_path) ** 2, axis=1))
     scores = np.exp(-distances * 10.0).clip(0.0, 1.0)
     order = np.argsort(scores)[::-1][:top_k]
     scoring_seconds = time.perf_counter() - t0
 
-    actual_times = [str(start_times[int(i)]) for i in order]
+    actual_times = [str(historical_start_times[int(i)]) for i in order]
     expected_times = [str(m.window.start_time) for m in expected]
     same_order = actual_times == expected_times
 
