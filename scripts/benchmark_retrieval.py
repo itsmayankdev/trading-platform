@@ -28,68 +28,50 @@ def load_candles(symbol: str, timeframe: str) -> list[CandlePoint]:
         ).scalar_one_or_none()
         if instrument_id is None:
             raise SystemExit(f"Unknown instrument: {symbol}")
-
         rows = db.execute(
             select(Candle)
-            .where(
-                Candle.instrument_id == instrument_id,
-                Candle.timeframe == timeframe,
-            )
+            .where(Candle.instrument_id == instrument_id, Candle.timeframe == timeframe)
             .order_by(Candle.timestamp.asc())
         ).scalars().all()
-
-    return [
-        CandlePoint(r.timestamp, r.open, r.high, r.low, r.close, r.volume)
-        for r in rows
-    ]
+    return [CandlePoint(r.timestamp, r.open, r.high, r.low, r.close, r.volume) for r in rows]
 
 
 def benchmark_bruteforce(current, historical, top_k: int) -> tuple[list, float]:
-    retriever = BruteForceRetriever("similarity_v1")
     t0 = time.perf_counter()
-    result = retriever.retrieve(current, historical, top_k)
+    result = BruteForceRetriever("similarity_v1").retrieve(current, historical, top_k)
     return result, time.perf_counter() - t0
 
 
-def benchmark_numerical(
-    candles: list[CandlePoint],
-    pattern_length: int,
-    top_k: int,
-    expected: list,
-) -> tuple[list, float, float, float]:
+def benchmark_numerical(candles, pattern_length, top_k, expected, current_start_time):
     t0 = time.perf_counter()
     store = build_numerical_store(candles, pattern_length)
     build_seconds = time.perf_counter() - t0
 
     t0 = time.perf_counter()
     matrix = store.normalized_close_matrix()
-    start_times = store.window_start_times()
+    starts = store.window_start_times()
+    ends = store.window_end_times()
 
-    # Exact equivalent of the PatternWindow historical boundary:
-    # candidate window end must be before the current window start.
-    current_start_time = store.current_start_time()
-    current_index = store.window_count - 1
-    historical_indices = np.flatnonzero(
-        np.asarray(start_times < current_start_time, dtype=bool)
-    )
-    historical_matrix = matrix[historical_indices]
-    historical_start_times = start_times[historical_indices]
+    # Exact match to the PatternWindow rule: historical window END
+    # must be strictly before the current window START.
+    eligible = ends < current_start_time
+    historical_matrix = matrix[eligible]
+    historical_starts = starts[eligible]
+    current_path = matrix[-1]
 
-    current_path = matrix[current_index]
     distances = np.sqrt(np.mean((historical_matrix - current_path) ** 2, axis=1))
     scores = np.exp(-distances * 10.0).clip(0.0, 1.0)
     order = np.argsort(scores)[::-1][:top_k]
     scoring_seconds = time.perf_counter() - t0
 
-    actual_times = [str(historical_start_times[int(i)]) for i in order]
+    actual_times = [str(historical_starts[int(i)]) for i in order]
     expected_times = [str(m.window.start_time) for m in expected]
     same_order = actual_times == expected_times
 
     max_score_error = 0.0
     if expected:
         expected_scores = np.array([m.score for m in expected], dtype=np.float64)
-        actual_scores = scores[order]
-        max_score_error = float(np.max(np.abs(expected_scores - actual_scores)))
+        max_score_error = float(np.max(np.abs(expected_scores - scores[order])))
 
     if not same_order or max_score_error > 1e-12:
         raise SystemExit(
@@ -118,10 +100,7 @@ def main() -> None:
 
     brute, brute_seconds = benchmark_bruteforce(current, historical, args.top_k)
     numerical, build_seconds, numerical_seconds, max_score_error = benchmark_numerical(
-        candles,
-        args.pattern_length,
-        args.top_k,
-        brute,
+        candles, args.pattern_length, args.top_k, brute, current.start_time
     )
 
     same_order = [m.window.start_time for m in brute] == [m.window.start_time for m in numerical]
@@ -138,10 +117,8 @@ def main() -> None:
     print(f"Numerical scoring:   {numerical_seconds:.6f}s")
     print(f"Numerical total:     {total_numerical:.6f}s")
     print()
-    if numerical_seconds > 0:
-        print(f"Scoring speedup:     {brute_seconds / numerical_seconds:.2f}x")
-    if total_numerical > 0:
-        print(f"End-to-end speedup:  {brute_seconds / total_numerical:.2f}x")
+    print(f"Scoring speedup:     {brute_seconds / numerical_seconds:.2f}x")
+    print(f"End-to-end speedup:  {brute_seconds / total_numerical:.2f}x")
     print(f"Same order:          {same_order}")
     print(f"Max error:           {max_score_error:.3e}")
 
