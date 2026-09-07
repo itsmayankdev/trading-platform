@@ -102,9 +102,12 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    void refreshLiveQuote();
-    const timer = window.setInterval(() => void refreshLiveQuote(), 10000);
-    return () => window.clearInterval(timer);
+    const initialTimer = window.setTimeout(() => void refreshLiveQuote(), 0);
+    const interval = window.setInterval(() => void refreshLiveQuote(), 10000);
+    return () => {
+      window.clearTimeout(initialTimer);
+      window.clearInterval(interval);
+    };
     // Refresh quote whenever the selected instrument/timeframe changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [symbol, timeframe]);
