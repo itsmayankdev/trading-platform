@@ -39,7 +39,6 @@ class IngestionPlanner:
     def build_plans(self, now: datetime | None = None) -> list[IngestionPlan]:
         now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
         plans: list[IngestionPlan] = []
-        desired_end = now
 
         with SessionLocal() as db:
             rows = db.execute(
@@ -61,7 +60,7 @@ class IngestionPlanner:
                     desired_start = floor_to_timeframe(
                         now - timedelta(days=self.history_days), timeframe
                     )
-                    end = floor_to_timeframe(desired_end, timeframe)
+                    end = floor_to_timeframe(now, timeframe)
                     delta = timeframe_delta(timeframe)
 
                     coverage = db.execute(
@@ -77,6 +76,8 @@ class IngestionPlanner:
                         {"instrument_id": instrument["id"], "timeframe": timeframe},
                     ).mappings().one()
 
+                    # A queued job is already work in progress. Do not create a
+                    # second plan for the same symbol/timeframe while it waits.
                     active = db.execute(
                         text(
                             """
@@ -84,13 +85,12 @@ class IngestionPlanner:
                             FROM ingestion_jobs
                             WHERE symbol = :symbol
                               AND timeframe = :timeframe
-                              AND status = 'running'
+                              AND status IN ('queued', 'running')
                             LIMIT 1
                             """
                         ),
                         {"symbol": symbol, "timeframe": timeframe},
                     ).first()
-
                     if active:
                         continue
 
@@ -103,6 +103,9 @@ class IngestionPlanner:
                         )
                         continue
 
+                    # Schedule the historical gap first. Incremental catch-up is
+                    # intentionally deferred until this job completes, preventing
+                    # two active jobs for the same symbol/timeframe.
                     if min_timestamp > desired_start:
                         plans.append(
                             IngestionPlan(
@@ -113,6 +116,7 @@ class IngestionPlanner:
                                 "historical_backfill",
                             )
                         )
+                        continue
 
                     if max_timestamp is None:
                         continue
@@ -132,27 +136,11 @@ class IngestionPlanner:
         return plans
 
     def enqueue(self, plans: list[IngestionPlan]) -> int:
-        """Persist plans as runnable jobs; never creates duplicate running jobs."""
+        """Persist plans while relying on the database for concurrency safety."""
         created = 0
         with SessionLocal() as db:
             for plan in plans:
-                exists = db.execute(
-                    text(
-                        """
-                        SELECT 1
-                        FROM ingestion_jobs
-                        WHERE symbol = :symbol
-                          AND timeframe = :timeframe
-                          AND status = 'running'
-                        LIMIT 1
-                        """
-                    ),
-                    {"symbol": plan.symbol, "timeframe": plan.timeframe},
-                ).first()
-                if exists:
-                    continue
-
-                db.execute(
+                result = db.execute(
                     text(
                         """
                         INSERT INTO ingestion_jobs
@@ -162,6 +150,9 @@ class IngestionPlanner:
                         VALUES
                             (:symbol, :timeframe, :start_time, :end_time,
                              :start_time, 'queued', 0, 0, :updated_at)
+                        ON CONFLICT (symbol, timeframe)
+                        WHERE status IN ('queued', 'running')
+                        DO NOTHING
                         """
                     ),
                     {
@@ -172,7 +163,7 @@ class IngestionPlanner:
                         "updated_at": datetime.now(timezone.utc),
                     },
                 )
-                created += 1
+                created += result.rowcount
             db.commit()
         return created
 
