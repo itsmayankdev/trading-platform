@@ -3,8 +3,8 @@ from sqlalchemy import select
 from backend.app.db.session import SessionLocal
 from backend.app.models.candle import Candle
 
-from pattern_engine.window import CandlePoint
-from pattern_engine.window_builder import build_windows
+from pattern_engine.retrieval.numerical import build_numerical_store
+from pattern_engine.window import CandlePoint, PatternWindow
 from pattern_engine.ranking import PatternRanker
 from pattern_engine.outcomes import calculate_outcomes
 from pattern_engine.statistics import calculate_statistics
@@ -22,7 +22,6 @@ class PatternSearchService:
     ):
 
         with SessionLocal() as db:
-
             rows = db.execute(
                 select(Candle)
                 .where(
@@ -44,31 +43,23 @@ class PatternSearchService:
             for row in rows
         ]
 
-        windows = build_windows(
+        if len(candles) < pattern_length + 1:
+            raise ValueError("Not enough candles to perform pattern search")
+
+        current = PatternWindow(
             symbol=symbol,
             timeframe=timeframe,
-            candles=candles,
-            window_length=pattern_length,
+            start_time=candles[-pattern_length].timestamp,
+            end_time=candles[-1].timestamp,
+            candles=tuple(candles[-pattern_length:]),
         )
 
-        if len(windows) < 2:
-            raise ValueError(
-                "Not enough candles to perform pattern search"
-            )
-
-        current = windows[-1]
-
-        historical = [
-            window
-            for window in windows
-            if window.end_time < current.start_time
-        ]
-
+        store = build_numerical_store(candles, pattern_length)
         ranker = PatternRanker()
 
-        matches = ranker.rank(
+        matches = ranker.rank_numerical_v1(
             current=current,
-            historical_windows=historical,
+            store=store,
             top_k=top_k,
             min_separation_candles=pattern_length,
         )
@@ -77,11 +68,17 @@ class PatternSearchService:
         all_outcomes = []
 
         for match in matches:
-
-            matched_window = next(
-                window
-                for window in historical
-                if window.start_time == match.start_time
+            start_index = next(
+                index
+                for index, candle in enumerate(candles)
+                if candle.timestamp == match.start_time
+            )
+            matched_window = PatternWindow(
+                symbol=symbol,
+                timeframe=timeframe,
+                start_time=match.start_time,
+                end_time=match.end_time,
+                candles=tuple(candles[start_index : start_index + pattern_length]),
             )
 
             future = [
@@ -94,17 +91,13 @@ class PatternSearchService:
                 match=matched_window,
                 future_candles=future,
             )
-
             all_outcomes.extend(outcomes)
 
             match_results.append(
                 {
                     "start_time": match.start_time,
                     "end_time": match.end_time,
-                    "similarity_score": round(
-                        match.similarity_score * 100,
-                        4,
-                    ),
+                    "similarity_score": round(match.similarity_score * 100, 4),
                     "outcomes": [
                         {
                             "horizon_candles": outcome.horizon_candles,
@@ -117,9 +110,7 @@ class PatternSearchService:
                 }
             )
 
-        statistics = calculate_statistics(
-            all_outcomes
-        )
+        statistics = calculate_statistics(all_outcomes)
 
         return {
             "symbol": symbol,
