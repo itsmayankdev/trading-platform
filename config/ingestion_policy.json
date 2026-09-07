@@ -11,6 +11,7 @@
       "name": "standard",
       "priority": 50,
       "symbols": [],
+      "top_by_quote_volume": 20,
       "history_days": 90
     }
   ],
