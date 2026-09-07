@@ -1,3 +1,6 @@
+import os
+import time
+
 from sqlalchemy import select
 
 from backend.app.db.session import SessionLocal
@@ -20,7 +23,14 @@ class PatternSearchService:
         pattern_length: int = 45,
         top_k: int = 10,
     ):
+        profile = os.getenv("PATTERN_SEARCH_PROFILE", "false").lower() == "true"
+        timings: dict[str, float] = {}
 
+        def mark(name: str, started: float) -> None:
+            if profile:
+                timings[name] = time.perf_counter() - started
+
+        started = time.perf_counter()
         with SessionLocal() as db:
             rows = db.execute(
                 select(Candle)
@@ -30,7 +40,9 @@ class PatternSearchService:
                 )
                 .order_by(Candle.timestamp.asc())
             ).scalars().all()
+        mark("db_load", started)
 
+        started = time.perf_counter()
         candles = [
             CandlePoint(
                 timestamp=row.timestamp,
@@ -42,10 +54,12 @@ class PatternSearchService:
             )
             for row in rows
         ]
+        mark("candle_conversion", started)
 
         if len(candles) < pattern_length + 1:
             raise ValueError("Not enough candles to perform pattern search")
 
+        started = time.perf_counter()
         current = PatternWindow(
             symbol=symbol,
             timeframe=timeframe,
@@ -53,26 +67,31 @@ class PatternSearchService:
             end_time=candles[-1].timestamp,
             candles=tuple(candles[-pattern_length:]),
         )
+        mark("current_window", started)
 
+        started = time.perf_counter()
         store = build_numerical_store(candles, pattern_length)
-        ranker = PatternRanker()
+        mark("numerical_store", started)
 
+        started = time.perf_counter()
+        ranker = PatternRanker()
         matches = ranker.rank_numerical_v1(
             current=current,
             store=store,
             top_k=top_k,
             min_separation_candles=pattern_length,
         )
+        mark("ranking", started)
 
+        started = time.perf_counter()
         match_results = []
         all_outcomes = []
+        timestamp_to_index = {
+            candle.timestamp: index for index, candle in enumerate(candles)
+        }
 
         for match in matches:
-            start_index = next(
-                index
-                for index, candle in enumerate(candles)
-                if candle.timestamp == match.start_time
-            )
+            start_index = timestamp_to_index[match.start_time]
             matched_window = PatternWindow(
                 symbol=symbol,
                 timeframe=timeframe,
@@ -109,10 +128,12 @@ class PatternSearchService:
                     ],
                 }
             )
+        mark("outcomes", started)
 
+        started = time.perf_counter()
         statistics = calculate_statistics(all_outcomes)
 
-        return {
+        response = {
             "symbol": symbol,
             "timeframe": timeframe,
             "pattern_length": pattern_length,
@@ -136,3 +157,14 @@ class PatternSearchService:
                 for stat in statistics
             ],
         }
+        mark("response_build", started)
+
+        if profile:
+            total = sum(timings.values())
+            print(
+                "PATTERN_SEARCH_PROFILE "
+                + " ".join(f"{name}={value:.4f}s" for name, value in timings.items())
+                + f" total_stages={total:.4f}s candles={len(candles)}"
+            )
+
+        return response
