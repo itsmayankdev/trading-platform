@@ -1,7 +1,11 @@
+from __future__ import annotations
+
 import os
 import time
+from collections import OrderedDict
+from threading import Lock
 
-from sqlalchemy import select
+from sqlalchemy import desc, select
 
 from backend.app.db.session import SessionLocal
 from backend.app.models.candle import Candle
@@ -11,6 +15,74 @@ from pattern_engine.window import CandlePoint, PatternWindow
 from pattern_engine.ranking import PatternRanker
 from pattern_engine.outcomes import calculate_outcomes
 from pattern_engine.statistics import calculate_statistics
+
+
+_CACHE_MAX_ENTRIES = 8
+_CACHE_TTL_SECONDS = 15.0
+_CANDLE_CACHE: OrderedDict[tuple[int, str], tuple[float, object, object, tuple]] = OrderedDict()
+_CACHE_LOCK = Lock()
+
+
+def _cached_rows(
+    instrument_id: int,
+    timeframe: str,
+) -> tuple[tuple, bool]:
+    key = (instrument_id, timeframe)
+    now = time.monotonic()
+
+    with SessionLocal() as db:
+        latest = db.execute(
+            select(Candle.timestamp, Candle.close)
+            .where(
+                Candle.instrument_id == instrument_id,
+                Candle.timeframe == timeframe,
+            )
+            .order_by(desc(Candle.timestamp))
+            .limit(1)
+        ).first()
+
+        if latest is None:
+            return (), False
+
+        latest_timestamp = latest.timestamp
+        latest_close = latest.close
+
+        with _CACHE_LOCK:
+            cached = _CANDLE_CACHE.get(key)
+            if cached is not None:
+                cached_at, cached_timestamp, cached_close, cached_rows = cached
+                if (
+                    now - cached_at <= _CACHE_TTL_SECONDS
+                    and cached_timestamp == latest_timestamp
+                    and cached_close == latest_close
+                ):
+                    _CANDLE_CACHE.move_to_end(key)
+                    return cached_rows, True
+
+            rows = tuple(
+                db.execute(
+                    select(
+                        Candle.timestamp,
+                        Candle.open,
+                        Candle.high,
+                        Candle.low,
+                        Candle.close,
+                        Candle.volume,
+                    )
+                    .where(
+                        Candle.instrument_id == instrument_id,
+                        Candle.timeframe == timeframe,
+                    )
+                    .order_by(Candle.timestamp.asc())
+                ).all()
+            )
+
+            _CANDLE_CACHE[key] = (now, latest_timestamp, latest_close, rows)
+            _CANDLE_CACHE.move_to_end(key)
+            while len(_CANDLE_CACHE) > _CACHE_MAX_ENTRIES:
+                _CANDLE_CACHE.popitem(last=False)
+
+            return rows, False
 
 
 class PatternSearchService:
@@ -31,22 +103,7 @@ class PatternSearchService:
                 timings[name] = time.perf_counter() - started
 
         started = time.perf_counter()
-        with SessionLocal() as db:
-            rows = db.execute(
-                select(
-                    Candle.timestamp,
-                    Candle.open,
-                    Candle.high,
-                    Candle.low,
-                    Candle.close,
-                    Candle.volume,
-                )
-                .where(
-                    Candle.instrument_id == instrument_id,
-                    Candle.timeframe == timeframe,
-                )
-                .order_by(Candle.timestamp.asc())
-            ).all()
+        rows, cache_hit = _cached_rows(instrument_id, timeframe)
         mark("db_load", started)
 
         if len(rows) < pattern_length + 1:
@@ -195,7 +252,7 @@ class PatternSearchService:
             print(
                 "PATTERN_SEARCH_PROFILE "
                 + " ".join(f"{name}={value:.4f}s" for name, value in timings.items())
-                + f" total_stages={total:.4f}s candles={len(rows)}"
+                + f" cache_hit={cache_hit} total_stages={total:.4f}s candles={len(rows)}"
             )
 
         return response
