@@ -33,6 +33,20 @@ export default function Home() {
     setSymbol(value);
     setData(null);
     setError("");
+    setLiveQuote(null);
+  }
+
+  function changeTimeframe(value: string) {
+    setTimeframe(value);
+    setData(null);
+    setError("");
+    setLiveQuote(null);
+  }
+
+  function changePatternLength(value: string) {
+    setPatternLength(value);
+    setData(null);
+    setError("");
   }
 
   function toggleWatchlist(value: string) {
@@ -88,7 +102,6 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    setLiveQuote(null);
     void refreshLiveQuote();
     const timer = window.setInterval(() => void refreshLiveQuote(), 10000);
     return () => window.clearInterval(timer);
@@ -117,8 +130,8 @@ export default function Home() {
             patternLength={patternLength}
             loading={loading}
             onSymbolChange={selectSymbol}
-            onTimeframeChange={(value) => { setTimeframe(value); setData(null); setError(""); }}
-            onPatternLengthChange={(value) => { setPatternLength(value); setData(null); setError(""); }}
+            onTimeframeChange={changeTimeframe}
+            onPatternLengthChange={changePatternLength}
             onSearch={() => void searchPatterns()}
           />
 
