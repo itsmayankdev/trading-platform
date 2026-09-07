@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import threading
 import time
 
 import httpx
@@ -29,7 +30,19 @@ class BinanceProvider(MarketDataProvider):
     }
 
     MAX_LIMIT = 1000
-    MAX_RETRIES = 4
+    MAX_RETRIES = 5
+    MIN_REQUEST_INTERVAL_SECONDS = 0.12
+    _request_lock = threading.Lock()
+    _last_request_at = 0.0
+
+    @classmethod
+    def _throttle(cls) -> None:
+        with cls._request_lock:
+            now = time.monotonic()
+            wait = cls.MIN_REQUEST_INTERVAL_SECONDS - (now - cls._last_request_at)
+            if wait > 0:
+                time.sleep(wait)
+            cls._last_request_at = time.monotonic()
 
     def get_candles(
         self,
@@ -38,16 +51,12 @@ class BinanceProvider(MarketDataProvider):
         start: datetime,
         end: datetime,
     ) -> list[Candle]:
-
         if timeframe not in self.INTERVALS:
-            raise ValueError(
-                f"Unsupported Binance timeframe: {timeframe}"
-            )
-
+            raise ValueError(f"Unsupported Binance timeframe: {timeframe}")
         if start.tzinfo is None or end.tzinfo is None:
-            raise ValueError(
-                "start and end must be timezone-aware"
-            )
+            raise ValueError("start and end must be timezone-aware")
+        if start >= end:
+            raise ValueError("start must be before end")
 
         params = {
             "symbol": symbol.upper(),
@@ -57,21 +66,35 @@ class BinanceProvider(MarketDataProvider):
             "limit": self.MAX_LIMIT,
         }
 
-        last_error = None
+        last_error: Exception | None = None
 
         for attempt in range(self.MAX_RETRIES):
-
             try:
+                self._throttle()
+                with httpx.Client(timeout=20.0) as client:
+                    response = client.get(
+                        f"{self.BASE_URL}/api/v3/klines",
+                        params=params,
+                    )
 
-                response = httpx.get(
-                    f"{self.BASE_URL}/api/v3/klines",
-                    params=params,
-                    timeout=20.0,
-                )
+                if response.status_code == 429:
+                    retry_after = response.headers.get("Retry-After")
+                    delay = float(retry_after) if retry_after else min(2 ** attempt, 30)
+                    raise _RetryableBinanceError(
+                        f"Binance rate limit (429); retry after {delay:.1f}s",
+                        delay,
+                    )
+
+                if 500 <= response.status_code < 600:
+                    raise _RetryableBinanceError(
+                        f"Binance server error ({response.status_code})",
+                        min(2 ** attempt, 30),
+                    )
 
                 response.raise_for_status()
-
                 rows = response.json()
+                if not isinstance(rows, list):
+                    raise ValueError("Unexpected Binance kline response")
 
                 candles = [
                     Candle(
@@ -87,28 +110,36 @@ class BinanceProvider(MarketDataProvider):
                     )
                     for row in rows
                 ]
-
                 return candles
 
-            except (httpx.HTTPError, ValueError) as exc:
-
+            except _RetryableBinanceError as exc:
                 last_error = exc
-
                 if attempt == self.MAX_RETRIES - 1:
                     break
-
-                delay = 2 ** attempt
-
+                delay = exc.delay
                 print(
-                    f"Binance request failed "
-                    f"(attempt {attempt + 1}/"
-                    f"{self.MAX_RETRIES}). "
-                    f"Retrying in {delay}s..."
+                    f"Binance request failed (attempt {attempt + 1}/"
+                    f"{self.MAX_RETRIES}): {exc}. Retrying in {delay:.1f}s..."
                 )
+                time.sleep(delay)
 
+            except (httpx.HTTPError, ValueError) as exc:
+                last_error = exc
+                if attempt == self.MAX_RETRIES - 1:
+                    break
+                delay = min(2 ** attempt, 30)
+                print(
+                    f"Binance request failed (attempt {attempt + 1}/"
+                    f"{self.MAX_RETRIES}): {exc}. Retrying in {delay}s..."
+                )
                 time.sleep(delay)
 
         raise RuntimeError(
-            f"Binance request failed after "
-            f"{self.MAX_RETRIES} attempts"
+            f"Binance request failed after {self.MAX_RETRIES} attempts"
         ) from last_error
+
+
+class _RetryableBinanceError(Exception):
+    def __init__(self, message: str, delay: float) -> None:
+        super().__init__(message)
+        self.delay = delay
