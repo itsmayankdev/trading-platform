@@ -25,8 +25,12 @@ def load_candles(symbol: str, timeframe: str) -> list[CandlePoint]:
     with SessionLocal() as db:
         rows = db.execute(
             select(Candle)
-            .join(Candle.instrument)
-            .where(Candle.instrument.has(symbol=symbol), Candle.timeframe == timeframe)
+            .where(
+                Candle.instrument_id.in_(
+                    select(Instrument.id).where(Instrument.symbol == symbol)
+                ),
+                Candle.timeframe == timeframe,
+            )
             .order_by(Candle.timestamp.asc())
         ).scalars().all()
     return [CandlePoint(r.timestamp, r.open, r.high, r.low, r.close, r.volume) for r in rows]
@@ -49,6 +53,7 @@ def main() -> None:
     historical = [w for w in windows if w.end_time < current.start_time]
 
     store = build_numerical_store(candles, args.pattern_length)
+    _ = store
 
     t0 = time.perf_counter()
     brute = BruteForceRetriever("similarity_v1").retrieve(current, historical, args.top_k)
