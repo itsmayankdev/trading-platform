@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 
 import numpy as np
 
-from pattern_engine.retrieval.numerical import build_numerical_store
+from pattern_engine.retrieval.numerical import NumericalWindowStore
 
 
 def _closes(count: int, pattern_length: int) -> list[float]:
@@ -18,7 +18,11 @@ def test_rank_v1_never_returns_overlapping_current_window():
     start = datetime(2026, 1, 1, tzinfo=timezone.utc)
     timestamps = [start + timedelta(minutes=5 * i) for i in range(len(closes))]
 
-    store = build_numerical_store(timestamps=timestamps, closes=closes, window_length=pattern_length)
+    store = NumericalWindowStore.from_columns(
+        timestamps=timestamps,
+        closes=closes,
+        window_length=pattern_length,
+    )
     current_start = store.current_start_time()
 
     matches = store.rank_v1(
@@ -36,4 +40,7 @@ def test_rank_v1_never_returns_overlapping_current_window():
     # The immediately preceding overlapping windows are intentionally made
     # attractive; none may leak into the historical result set.
     current_start_index = len(closes) - pattern_length
-    assert all(start_index <= current_start_index - pattern_length for start_index, _ in matches)
+    assert all(
+        start_index <= current_start_index - pattern_length
+        for start_index, _ in matches
+    )
