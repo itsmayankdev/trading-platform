@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
-import { Activity, BarChart3, Database, ShieldCheck, Sparkles } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Activity, Search, ShieldCheck } from "lucide-react";
 import MarketChart from "@/components/MarketChart";
 import Sidebar from "@/components/layout/Sidebar";
 import HistoricalPatternChart from "@/components/pattern-search/HistoricalPatternChart";
@@ -12,28 +12,13 @@ import type { SearchResponse } from "@/components/pattern-search/types";
 
 const WATCHLIST = ["BTCUSDT", "ETHUSDT", "SOLUSDT"];
 
-function SummaryCard({ label, value, detail, icon }: { label: string; value: string; detail: string; icon: ReactNode }) {
-  return (
-    <div className="panel min-w-0 px-4 py-3.5">
-      <div className="flex items-center justify-between">
-        <span className="text-[9px] font-medium uppercase tracking-[0.16em] text-white/28">{label}</span>
-        <span className="text-white/25">{icon}</span>
-      </div>
-      <div className="mt-2.5 truncate text-lg font-semibold tracking-tight">{value}</div>
-      <div className="mt-0.5 truncate text-[10px] text-white/28">{detail}</div>
-    </div>
-  );
-}
+type LiveQuote = {
+  price: number;
+  change: number;
+};
 
-function formatDate(value: string) {
-  return new Intl.DateTimeFormat("en-GB", {
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    timeZone: "UTC",
-  }).format(new Date(value));
+function formatPrice(value: number) {
+  return new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value);
 }
 
 export default function Home() {
@@ -45,6 +30,7 @@ export default function Home() {
   const [error, setError] = useState("");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [watchlist, setWatchlist] = useState<string[]>(WATCHLIST);
+  const [liveQuote, setLiveQuote] = useState<LiveQuote | null>(null);
 
   function selectSymbol(value: string) {
     setSymbol(value);
@@ -62,6 +48,22 @@ export default function Home() {
       }
       return next;
     });
+  }
+
+  async function refreshLiveQuote() {
+    try {
+      const params = new URLSearchParams({ symbol, timeframe, limit: "2" });
+      const response = await fetch(`/api/backend/api/v1/candles?${params.toString()}`, { cache: "no-store" });
+      if (!response.ok) return;
+      const result = (await response.json()) as { candles: Array<{ close: number }> };
+      const candles = result.candles ?? [];
+      const latest = candles.at(-1)?.close;
+      const previous = candles.at(-2)?.close;
+      if (latest == null) return;
+      setLiveQuote({ price: latest, change: previous ? ((latest - previous) / previous) * 100 : 0 });
+    } catch {
+      /* Keep the last known quote when the polling request fails. */
+    }
   }
 
   async function searchPatterns() {
@@ -97,28 +99,25 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const currentPattern = data?.current_pattern;
+  useEffect(() => {
+    setLiveQuote(null);
+    void refreshLiveQuote();
+    const timer = window.setInterval(() => void refreshLiveQuote(), 10000);
+    return () => window.clearInterval(timer);
+    // Refresh whenever the selected instrument/timeframe changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [symbol, timeframe]);
 
   return (
     <main className="min-h-screen bg-[#070a0f] text-white">
-      <header className="sticky top-0 z-30 h-16 border-b border-white/7 bg-[#070a0f]/95 backdrop-blur-xl">
-        <div className="flex h-full items-center justify-between px-4 sm:px-6">
-          <div className="flex items-center gap-3">
-            <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-white/10 bg-white text-black">
-              <Activity size={18} />
-            </div>
-            <div>
-              <div className="text-sm font-semibold tracking-[0.08em]">MARKET MEMORY</div>
-              <div className="hidden text-[10px] uppercase tracking-[0.14em] text-white/30 sm:block">Historical pattern intelligence</div>
-            </div>
+      <header className="sticky top-0 z-40 h-12 border-b border-white/8 bg-[#070a0f]/98">
+        <div className="flex h-full items-center justify-between px-4 sm:px-5">
+          <div className="flex items-center gap-2.5">
+            <div className="flex h-7 w-7 items-center justify-center rounded-md bg-white text-black"><Activity size={15} /></div>
+            <span className="text-xs font-semibold tracking-[0.12em]">MARKET MEMORY</span>
           </div>
-          <div className="flex items-center gap-3">
-            <div className="hidden items-center gap-2 text-[10px] uppercase tracking-[0.12em] text-white/25 md:flex">
-              <ShieldCheck size={14} /> Server-side analysis
-            </div>
-            <div className="flex items-center gap-2 rounded-full border border-emerald-400/15 bg-emerald-400/5 px-3 py-1.5 text-[10px] font-medium uppercase tracking-[0.12em] text-emerald-400">
-              <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" /> Engine online
-            </div>
+          <div className="flex items-center gap-2 text-[9px] font-medium uppercase tracking-[0.12em] text-emerald-400/75">
+            <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" /> Engine online
           </div>
         </div>
       </header>
@@ -134,56 +133,48 @@ export default function Home() {
         />
 
         <div className="min-w-0 flex-1">
-          <div className="mx-auto max-w-[1700px] px-4 py-5 sm:px-6 lg:px-7 lg:py-7">
-            <section className="mb-5 flex flex-col gap-2 xl:flex-row xl:items-end xl:justify-between">
-              <div>
-                <div className="eyebrow flex items-center gap-2"><Sparkles size={12} /> Market Memory Engine</div>
-                <h1 className="mt-1.5 text-2xl font-semibold tracking-[-0.03em] sm:text-3xl">Historical pattern workstation</h1>
-                <p className="mt-2 max-w-2xl text-xs leading-5 text-white/35">Search the current market structure, inspect the closest historical windows, and compare what followed.</p>
+          <SearchControls
+            symbol={symbol}
+            timeframe={timeframe}
+            patternLength={patternLength}
+            loading={loading}
+            onSymbolChange={selectSymbol}
+            onTimeframeChange={(value) => { setTimeframe(value); setData(null); setError(""); }}
+            onPatternLengthChange={(value) => { setPatternLength(value); setData(null); setError(""); }}
+            onSearch={() => void searchPatterns()}
+          />
+
+          <div className="border-b border-white/7 bg-[#080c12] px-4 py-2 sm:px-5">
+            <div className="flex items-center gap-4 overflow-x-auto whitespace-nowrap">
+              <div className="flex items-center gap-2 pr-3 text-[10px] font-semibold uppercase tracking-[0.12em] text-white/45">
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" /> {symbol.replace("USDT", "/USDT")}
               </div>
-              <div className="hidden rounded-lg border border-white/7 bg-white/[0.02] px-3 py-2 text-[10px] uppercase tracking-[0.13em] text-white/30 xl:block">Research terminal · V1</div>
-            </section>
+              <div className="h-4 w-px bg-white/8" />
+              <div className="flex items-baseline gap-2">
+                <span className="font-mono text-base font-semibold tabular-nums">{liveQuote ? formatPrice(liveQuote.price) : "—"}</span>
+                <span className={`font-mono text-[10px] tabular-nums ${liveQuote && liveQuote.change >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
+                  {liveQuote ? `${liveQuote.change >= 0 ? "+" : ""}${liveQuote.change.toFixed(2)}%` : "Updating…"}
+                </span>
+              </div>
+              <div className="hidden h-4 w-px bg-white/8 sm:block" />
+              <div className="hidden items-center gap-2 text-[9px] uppercase tracking-[0.1em] text-white/25 sm:flex"><ShieldCheck size={12} /> Live market data</div>
+            </div>
+          </div>
 
-            <SearchControls
-              symbol={symbol}
-              timeframe={timeframe}
-              patternLength={patternLength}
-              loading={loading}
-              onSymbolChange={selectSymbol}
-              onTimeframeChange={(value) => {
-                setTimeframe(value);
-                setData(null);
-                setError("");
-              }}
-              onPatternLengthChange={(value) => {
-                setPatternLength(value);
-                setData(null);
-                setError("");
-              }}
-              onSearch={() => void searchPatterns()}
-            />
-
-            {error && <div className="mt-4 rounded-lg border border-red-400/15 bg-red-400/5 px-4 py-3 text-xs text-red-300">{error}</div>}
-            {loading && !data && <section className="mt-4 grid gap-3 md:grid-cols-4">{[1, 2, 3, 4].map((item) => <div key={item} className="panel h-24 animate-pulse bg-white/[0.02]" />)}</section>}
+          <div className="mx-auto max-w-[1800px] px-3 py-3 sm:px-4 lg:px-5">
+            {error && <div className="mb-3 rounded-md border border-red-400/15 bg-red-400/5 px-3 py-2 text-xs text-red-300">{error}</div>}
+            {loading && !data && <div className="grid gap-3 lg:grid-cols-2"><div className="panel h-[430px] animate-pulse" /><div className="panel h-[430px] animate-pulse" /></div>}
 
             {data && (
-              <div className="mt-4 space-y-4">
-                <section className="grid grid-cols-2 gap-3 xl:grid-cols-4">
-                  <SummaryCard label="Market" value={data.symbol.replace("USDT", "/USDT")} detail={`${data.timeframe} timeframe`} icon={<BarChart3 size={15} />} />
-                  <SummaryCard label="Pattern" value={`${data.pattern_length} candles`} detail={data.algorithm_version} icon={<Activity size={15} />} />
-                  <SummaryCard label="Matches" value={String(data.matches.length)} detail="independent historical windows" icon={<Database size={15} />} />
-                  <SummaryCard label="Feature set" value={data.feature_version} detail="server-side computation" icon={<ShieldCheck size={15} />} />
-                </section>
-
-                <section className="grid gap-4 2xl:grid-cols-2">
+              <div className="space-y-3">
+                <section className="grid grid-cols-1 gap-3 lg:grid-cols-2">
                   <section className="panel overflow-hidden">
-                    <div className="flex items-center justify-between border-b border-white/8 px-4 py-3.5">
+                    <div className="flex h-12 items-center justify-between border-b border-white/8 px-3.5">
                       <div>
-                        <div className="eyebrow">Current market</div>
-                        <h2 className="mt-1 text-sm font-semibold">{data.symbol.replace("USDT", "/USDT")} <span className="text-white/25">·</span> {data.timeframe}</h2>
-                        {currentPattern && <p className="mt-1 text-[10px] text-white/28">Pattern {formatDate(currentPattern.start_time)} → {formatDate(currentPattern.end_time)} UTC</p>}
+                        <div className="text-[9px] font-semibold uppercase tracking-[0.14em] text-white/35">Current market</div>
+                        <div className="mt-0.5 text-xs font-semibold">{data.symbol.replace("USDT", "/USDT")} <span className="text-white/20">·</span> {data.timeframe}</div>
                       </div>
-                      <div className="rounded-md border border-emerald-400/12 bg-emerald-400/[0.035] px-2.5 py-1.5 text-[9px] uppercase tracking-[0.12em] text-emerald-400/70"><span className="mr-1.5 inline-block h-1.5 w-1.5 rounded-full bg-emerald-400" />Live</div>
+                      <div className="font-mono text-[10px] text-white/30">{data.pattern_length} candles</div>
                     </div>
                     <MarketChart symbol={data.symbol} timeframe={data.timeframe} limit={Math.max(100, data.pattern_length + 35)} />
                   </section>
@@ -197,9 +188,12 @@ export default function Home() {
                   />
                 </section>
 
-                <HistoricalMatches matches={data.matches} />
-                <OutcomeStatistics statistics={data.statistics} />
-                <footer className="flex flex-col gap-2 border-t border-white/6 py-4 text-[9px] uppercase tracking-[0.12em] text-white/20 sm:flex-row sm:items-center sm:justify-between">
+                <section className="grid gap-3 xl:grid-cols-[1.45fr_1fr]">
+                  <HistoricalMatches matches={data.matches} />
+                  <OutcomeStatistics statistics={data.statistics} />
+                </section>
+
+                <footer className="flex flex-col gap-1 border-t border-white/6 py-3 text-[9px] uppercase tracking-[0.1em] text-white/18 sm:flex-row sm:items-center sm:justify-between">
                   <span>Algorithm {data.algorithm_version} · Features {data.feature_version}</span>
                   <span>Historical outcomes do not guarantee future performance.</span>
                 </footer>
