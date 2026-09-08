@@ -34,10 +34,10 @@ export default function PatternSummary({ data }: { data: SearchResponse }) {
         {directionRows.map(({ horizon, total, up, down, flat, dominant, dominantPct, consistency }) => {
           const info = HORIZON_LABELS[horizon];
           return (
-            <div key={horizon} title={info.detail} className="min-w-0 px-3 py-2.5 sm:px-4">
-              <div className="flex items-center justify-between gap-2"><span className="text-[10px] font-semibold tracking-[0.04em] text-white/60 sm:text-[11px]">{info.label}</span><span className="font-mono text-[8px] text-white/25 sm:text-[9px]">N {total}</span></div>
-              <div className="mt-1.5 flex items-center gap-4 font-mono text-[14px] font-semibold tabular-nums sm:text-[15px]"><span className="flex items-center gap-1 text-emerald-400"><ArrowUpRight size={14} /> {up}</span><span className="flex items-center gap-1 text-rose-400"><ArrowDownRight size={14} /> {down}</span>{flat > 0 && <span className="text-white/35">· {flat}</span>}</div>
-              <div className="mt-1.5 flex items-center justify-between gap-2 text-[9px] uppercase tracking-[0.07em] sm:text-[10px]"><span className={dominant === "UP" ? "text-emerald-300/80" : dominant === "DOWN" ? "text-rose-300/80" : "text-white/40"}>{dominant}</span><span className={consistency === "Strong" ? "text-white/65" : consistency === "Lean" ? "text-white/50" : "text-white/30"}>{consistency} · {dominantPct.toFixed(0)}%</span></div>
+            <div key={horizon} title={info.detail} className="min-w-0 px-3 py-2 sm:px-4">
+              <div className="flex items-center justify-between gap-2"><span className="text-[10px] font-semibold tracking-[0.04em] text-white/65 sm:text-[11px]">{info.label}</span><span className="font-mono text-[8px] text-white/25 sm:text-[9px]">N {total}</span></div>
+              <div className="mt-1 flex items-center gap-4 font-mono text-[14px] font-semibold tabular-nums sm:text-[15px]"><span className="flex items-center gap-1 text-emerald-400"><ArrowUpRight size={14} /> {up}</span><span className="flex items-center gap-1 text-rose-400"><ArrowDownRight size={14} /> {down}</span>{flat > 0 && <span className="text-white/35">· {flat}</span>}</div>
+              <div className="mt-1 flex items-center justify-between gap-2 text-[9px] uppercase tracking-[0.07em] sm:text-[10px]"><span className={dominant === "UP" ? "text-emerald-300/80" : dominant === "DOWN" ? "text-rose-300/80" : "text-white/40"}>{dominant}</span><span className={consistency === "Strong" ? "text-white/65" : consistency === "Lean" ? "text-white/50" : "text-white/30"}>{consistency} · {dominantPct.toFixed(0)}%</span></div>
             </div>
           );
         })}
