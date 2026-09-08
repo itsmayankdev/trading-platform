@@ -2,6 +2,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 from backend.app.auth.user_auth import clear_user_cookie, get_current_user, hash_password, require_user, set_user_cookie, verify_password
 from backend.app.db.session import get_db
@@ -16,11 +17,17 @@ def _load_user(db:Session,user_id:int):
 def register(response:Response,body:dict=Body(...),db:Session=Depends(get_db)):
     email=str(body.get("email","")).strip().lower();password=str(body.get("password",""));first=str(body.get("first_name","")).strip();last=str(body.get("last_name","")).strip();name=str(body.get("display_name","")).strip() or " ".join(x for x in [first,last] if x)
     if not email or "@" not in email:raise HTTPException(status_code=400,detail="Valid email is required")
-    if db.scalar(select(AdminUser).where(AdminUser.email==email)):raise HTTPException(status_code=409,detail="An account with this email already exists")
+    if len(password)<8:raise HTTPException(status_code=400,detail="Password must be at least 8 characters")
+    if db.scalar(select(AdminUser).where(AdminUser.email==email)):raise HTTPException(status_code=409,detail="An account with this email already exists. Please use a different email.")
     user=AdminUser(email=email,display_name=name,first_name=first,last_name=last,password_hash=hash_password(password),status="active");plan=db.scalar(select(AdminPlan).where(AdminPlan.code=="free",AdminPlan.active.is_(True)));role=db.scalar(select(AdminRole).where(AdminRole.code=="viewer"))
     if plan:user.plan=plan
     if role:user.roles=[role]
-    db.add(user);db.flush();user.last_seen_at=datetime.now(timezone.utc);db.commit();user=_load_user(db,user.id);set_user_cookie(response,user);return _serialize(user)
+    db.add(user)
+    try:
+        db.flush();user.last_seen_at=datetime.now(timezone.utc);db.commit()
+    except IntegrityError:
+        db.rollback();raise HTTPException(status_code=409,detail="An account with this email already exists. Please use a different email.")
+    user=_load_user(db,user.id);set_user_cookie(response,user);return _serialize(user)
 @router.post("/login")
 def login(response:Response,body:dict=Body(...),db:Session=Depends(get_db)):
     email=str(body.get("email","")).strip().lower();password=str(body.get("password",""));user=db.scalar(select(AdminUser).where(AdminUser.email==email))
