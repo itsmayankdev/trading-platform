@@ -9,14 +9,173 @@ type Props = { currentCandles: Candle[]; currentIndex: number; patternLength: nu
 type CandleSeries = ISeriesApi<"Candlestick">;
 type ChartState = { chart: IChartApi; series: CandleSeries };
 
-function setup(container: HTMLDivElement): ChartState { const chart = createChart(container, { width: container.clientWidth, height: Math.max(320, container.clientHeight), layout: { background: { type: ColorType.Solid, color: "#0d1219" }, textColor: "#8b95a7" }, grid: { vertLines: { color: "rgba(255,255,255,0.04)" }, horzLines: { color: "rgba(255,255,255,0.04)" } }, rightPriceScale: { borderColor: "rgba(255,255,255,0.1)" }, timeScale: { borderColor: "rgba(255,255,255,0.1)", timeVisible: true, secondsVisible: false }, crosshair: { vertLine: { color: "rgba(255,255,255,0.18)" }, horzLine: { color: "rgba(255,255,255,0.18)" } } }); const series = chart.addSeries(CandlestickSeries, { upColor: "#22c55e", downColor: "#ef4444", borderVisible: false, wickUpColor: "#22c55e", wickDownColor: "#ef4444" }); return { chart, series }; }
-function normalizedWindow(candles: Candle[], endIndex: number, patternLength: number) { if (!candles.length) return { data: [], highlightFrom: 0 }; const safeEnd = Math.min(candles.length - 1, Math.max(0, endIndex)); const contextLength = Math.min(candles.length, patternLength * 2); const start = Math.max(0, safeEnd - contextLength + 1); const slice = candles.slice(start, safeEnd + 1); const base = slice[0]?.close || 1; return { data: slice.map((c, index) => ({ time: index as Time, open: c.open / base, high: c.high / base, low: c.low / base, close: c.close / base })), highlightFrom: Math.max(0, slice.length - patternLength) }; }
+function setup(container: HTMLDivElement): ChartState {
+  const chart = createChart(container, {
+    width: container.clientWidth,
+    height: Math.max(320, container.clientHeight),
+    layout: { background: { type: ColorType.Solid, color: "#0d1219" }, textColor: "#8b95a7" },
+    grid: { vertLines: { color: "rgba(255,255,255,0.04)" }, horzLines: { color: "rgba(255,255,255,0.04)" } },
+    rightPriceScale: { borderColor: "rgba(255,255,255,0.1)" },
+    timeScale: { borderColor: "rgba(255,255,255,0.1)", timeVisible: true, secondsVisible: false },
+    crosshair: { vertLine: { color: "rgba(255,255,255,0.18)" }, horzLine: { color: "rgba(255,255,255,0.18)" } },
+  });
+  const series = chart.addSeries(CandlestickSeries, {
+    upColor: "#22c55e",
+    downColor: "#ef4444",
+    borderVisible: false,
+    wickUpColor: "#22c55e",
+    wickDownColor: "#ef4444",
+  });
+  return { chart, series };
+}
+
+function chartWindow(candles: Candle[], endIndex: number, patternLength: number) {
+  if (!candles.length) return { data: [], highlightFrom: 0, firstTime: undefined as number | undefined, lastTime: undefined as number | undefined };
+  const safeEnd = Math.min(candles.length - 1, Math.max(0, endIndex));
+  const contextLength = Math.min(candles.length, Math.max(patternLength * 2, 60));
+  const start = Math.max(0, safeEnd - contextLength + 1);
+  const slice = candles.slice(start, safeEnd + 1);
+
+  // IMPORTANT: preserve the real exchange timestamp and real OHLC values.
+  // Replay charts must show the same price scale and candle timing as the market,
+  // not a normalized 1.00-based path or synthetic 00:00 timestamps.
+  return {
+    data: slice.map((c) => ({
+      time: c.time as Time,
+      open: c.open,
+      high: c.high,
+      low: c.low,
+      close: c.close,
+    })),
+    highlightFrom: Math.max(0, slice.length - patternLength),
+    firstTime: slice[0]?.time,
+    lastTime: slice[slice.length - 1]?.time,
+  };
+}
+
+function formatUtc(seconds?: number) {
+  if (seconds == null) return "—";
+  return new Intl.DateTimeFormat("en-GB", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: "UTC",
+  }).format(new Date(seconds * 1000)) + " UTC";
+}
 
 export default function DualReplayChart({ currentCandles, currentIndex, patternLength, match, historicalCandles, historicalIndex }: Props) {
-  const leftRef = useRef<HTMLDivElement | null>(null); const rightRef = useRef<HTMLDivElement | null>(null); const leftState = useRef<ChartState | null>(null); const rightState = useRef<ChartState | null>(null); const leftHighlight = useRef<HTMLDivElement | null>(null); const rightHighlight = useRef<HTMLDivElement | null>(null);
-  const current = useMemo(() => normalizedWindow(currentCandles, currentIndex, patternLength), [currentCandles, currentIndex, patternLength]); const historical = useMemo(() => normalizedWindow(historicalCandles, historicalIndex, patternLength), [historicalCandles, historicalIndex, patternLength]);
-  useEffect(() => { if (!leftRef.current || !rightRef.current) return; const left = setup(leftRef.current); const right = setup(rightRef.current); leftState.current = left; rightState.current = right; const resize = new ResizeObserver(() => { if (leftRef.current) left.chart.applyOptions({ width: leftRef.current.clientWidth, height: Math.max(320, leftRef.current.clientHeight) }); if (rightRef.current) right.chart.applyOptions({ width: rightRef.current.clientWidth, height: Math.max(320, rightRef.current.clientHeight) }); }); resize.observe(leftRef.current); resize.observe(rightRef.current); return () => { resize.disconnect(); left.chart.remove(); right.chart.remove(); leftState.current = null; rightState.current = null; }; }, []);
-  useEffect(() => { const left = leftState.current; const right = rightState.current; if (!left || !right) return; left.series.setData(current.data); right.series.setData(historical.data); left.chart.timeScale().fitContent(); right.chart.timeScale().fitContent(); const place = (chart: IChartApi, node: HTMLDivElement | null, from: number, total: number) => { if (!node || total === 0) return; const x1 = chart.timeScale().logicalToCoordinate(from); const x2 = chart.timeScale().logicalToCoordinate(Math.max(from, total - 1)); if (x1 == null || x2 == null) return; node.style.left = `${Math.max(0, x1 - 2)}px`; node.style.width = `${Math.max(8, x2 - x1 + 4)}px`; }; place(left.chart, leftHighlight.current, current.highlightFrom, current.data.length); place(right.chart, rightHighlight.current, historical.highlightFrom, historical.data.length); }, [current, historical]);
-  useEffect(() => { const left = leftState.current; const right = rightState.current; if (!left || !right) return; let syncing = false; const sync = (source: IChartApi, target: IChartApi) => { if (syncing) return; const range = source.timeScale().getVisibleLogicalRange(); if (!range) return; syncing = true; target.timeScale().setVisibleLogicalRange(range); syncing = false; }; const onLeft = () => sync(left.chart, right.chart); const onRight = () => sync(right.chart, left.chart); left.chart.timeScale().subscribeVisibleLogicalRangeChange(onLeft); right.chart.timeScale().subscribeVisibleLogicalRangeChange(onRight); return () => { left.chart.timeScale().unsubscribeVisibleLogicalRangeChange(onLeft); right.chart.timeScale().unsubscribeVisibleLogicalRangeChange(onRight); }; }, []);
-  return <div className="grid gap-3 lg:grid-cols-2"><section className="overflow-hidden rounded-md border border-amber-300/15 bg-[#0d1219]"><div className="flex items-center justify-between border-b border-white/8 px-3 py-2"><div><div className="text-[9px] font-semibold uppercase tracking-[0.13em] text-white/30">Replay · Current</div><div className="mt-0.5 text-[11px] font-semibold text-white/75">Selected replay point</div></div><span className="rounded bg-amber-300/10 px-1.5 py-0.5 text-[8px] font-semibold uppercase tracking-[0.08em] text-amber-200">Current</span></div><div className="relative"><div ref={leftRef} className="h-[380px] w-full" /><div ref={leftHighlight} className="pointer-events-none absolute bottom-0 top-0 border border-amber-300/65 bg-amber-300/[0.06]" /></div><div className="border-t border-white/8 px-3 py-2 text-[8px] uppercase tracking-[0.08em] text-white/25">Amber window = exact replay pattern · {patternLength} candles</div></section><section className="overflow-hidden rounded-md border border-white/10 bg-[#0d1219]"><div className="flex items-center justify-between border-b border-white/8 px-3 py-2"><div><div className="text-[9px] font-semibold uppercase tracking-[0.13em] text-white/30">Historical match</div><div className="mt-0.5 text-[11px] font-semibold text-white/75">{match ? `${match.similarity_score.toFixed(2)}% similarity` : "Search Memory to compare"}</div></div>{match && <span className="font-mono text-[8px] text-white/25">{new Date(match.start_time).toISOString().slice(0,16).replace("T", " ")} UTC</span>}</div><div className="relative"><div ref={rightRef} className="h-[380px] w-full" /><div ref={rightHighlight} className="pointer-events-none absolute bottom-0 top-0 border border-amber-300/65 bg-amber-300/[0.06]" /></div><div className="border-t border-white/8 px-3 py-2 text-[8px] uppercase tracking-[0.08em] text-white/25">Amber window = exact historical match · future candles reveal with replay</div></section></div>;
+  const leftRef = useRef<HTMLDivElement | null>(null);
+  const rightRef = useRef<HTMLDivElement | null>(null);
+  const leftState = useRef<ChartState | null>(null);
+  const rightState = useRef<ChartState | null>(null);
+  const leftHighlight = useRef<HTMLDivElement | null>(null);
+  const rightHighlight = useRef<HTMLDivElement | null>(null);
+
+  const current = useMemo(() => chartWindow(currentCandles, currentIndex, patternLength), [currentCandles, currentIndex, patternLength]);
+  const historical = useMemo(() => chartWindow(historicalCandles, historicalIndex, patternLength), [historicalCandles, historicalIndex, patternLength]);
+
+  useEffect(() => {
+    if (!leftRef.current || !rightRef.current) return;
+    const left = setup(leftRef.current);
+    const right = setup(rightRef.current);
+    leftState.current = left;
+    rightState.current = right;
+
+    const resize = new ResizeObserver(() => {
+      if (leftRef.current) left.chart.applyOptions({ width: leftRef.current.clientWidth, height: Math.max(320, leftRef.current.clientHeight) });
+      if (rightRef.current) right.chart.applyOptions({ width: rightRef.current.clientWidth, height: Math.max(320, rightRef.current.clientHeight) });
+    });
+    resize.observe(leftRef.current);
+    resize.observe(rightRef.current);
+
+    return () => {
+      resize.disconnect();
+      left.chart.remove();
+      right.chart.remove();
+      leftState.current = null;
+      rightState.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    const left = leftState.current;
+    const right = rightState.current;
+    if (!left || !right) return;
+
+    left.series.setData(current.data);
+    right.series.setData(historical.data);
+    left.chart.timeScale().fitContent();
+    right.chart.timeScale().fitContent();
+
+    const place = (chart: IChartApi, node: HTMLDivElement | null, from: number, total: number) => {
+      if (!node || total === 0) return;
+      const x1 = chart.timeScale().logicalToCoordinate(from);
+      const x2 = chart.timeScale().logicalToCoordinate(Math.max(from, total - 1));
+      if (x1 == null || x2 == null) return;
+      node.style.left = `${Math.max(0, x1 - 2)}px`;
+      node.style.width = `${Math.max(8, x2 - x1 + 4)}px`;
+    };
+
+    place(left.chart, leftHighlight.current, current.highlightFrom, current.data.length);
+    place(right.chart, rightHighlight.current, historical.highlightFrom, historical.data.length);
+  }, [current, historical]);
+
+  useEffect(() => {
+    const left = leftState.current;
+    const right = rightState.current;
+    if (!left || !right) return;
+    let syncing = false;
+    const sync = (source: IChartApi, target: IChartApi) => {
+      if (syncing) return;
+      const range = source.timeScale().getVisibleLogicalRange();
+      if (!range) return;
+      syncing = true;
+      target.timeScale().setVisibleLogicalRange(range);
+      syncing = false;
+    };
+    const onLeft = () => sync(left.chart, right.chart);
+    const onRight = () => sync(right.chart, left.chart);
+    left.chart.timeScale().subscribeVisibleLogicalRangeChange(onLeft);
+    right.chart.timeScale().subscribeVisibleLogicalRangeChange(onRight);
+    return () => {
+      left.chart.timeScale().unsubscribeVisibleLogicalRangeChange(onLeft);
+      right.chart.timeScale().unsubscribeVisibleLogicalRangeChange(onRight);
+    };
+  }, []);
+
+  return (
+    <div className="grid gap-3 lg:grid-cols-2">
+      <section className="overflow-hidden rounded-md border border-amber-300/15 bg-[#0d1219]">
+        <div className="flex items-center justify-between border-b border-white/8 px-3 py-2">
+          <div>
+            <div className="text-[9px] font-semibold uppercase tracking-[0.13em] text-white/30">Replay · Current</div>
+            <div className="mt-0.5 text-[11px] font-semibold text-white/75">{current.lastTime != null ? formatUtc(current.lastTime) : "Selected replay point"}</div>
+          </div>
+          <span className="rounded bg-amber-300/10 px-1.5 py-0.5 text-[8px] font-semibold uppercase tracking-[0.08em] text-amber-200">Current</span>
+        </div>
+        <div className="relative">
+          <div ref={leftRef} className="h-[380px] w-full" />
+          <div ref={leftHighlight} className="pointer-events-none absolute bottom-0 top-0 border border-amber-300/65 bg-amber-300/[0.06]" />
+        </div>
+        <div className="border-t border-white/8 px-3 py-2 text-[8px] uppercase tracking-[0.08em] text-white/25">Amber window = exact replay pattern · {patternLength} candles · actual market prices/time</div>
+      </section>
+
+      <section className="overflow-hidden rounded-md border border-white/10 bg-[#0d1219]">
+        <div className="flex items-center justify-between border-b border-white/8 px-3 py-2">
+          <div>
+            <div className="text-[9px] font-semibold uppercase tracking-[0.13em] text-white/30">Historical match</div>
+            <div className="mt-0.5 text-[11px] font-semibold text-white/75">{match ? `${match.similarity_score.toFixed(2)}% similarity` : "Search Memory to compare"}</div>
+          </div>
+          {match && <span className="font-mono text-[8px] text-white/25">{formatUtc(new Date(match.end_time).getTime() / 1000)}</span>}
+        </div>
+        <div className="relative">
+          <div ref={rightRef} className="h-[380px] w-full" />
+          <div ref={rightHighlight} className="pointer-events-none absolute bottom-0 top-0 border border-amber-300/65 bg-amber-300/[0.06]" />
+        </div>
+        <div className="border-t border-white/8 px-3 py-2 text-[8px] uppercase tracking-[0.08em] text-white/25">Amber window = exact historical match · future candles reveal with replay · actual market prices/time</div>
+      </section>
+    </div>
+  );
 }
