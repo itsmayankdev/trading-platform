@@ -47,7 +47,7 @@ class AdminRole(Base):
     description: Mapped[str] = mapped_column(String(500), default="")
     system: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    users: Mapped[list[AdminUser]] = relationship(secondary=user_roles, back_populates="users")
+    users: Mapped[list[AdminUser]] = relationship(secondary=user_roles, back_populates="roles")
     permissions: Mapped[list[AdminPermission]] = relationship(secondary=role_permissions, back_populates="roles")
 
 class AdminPermission(Base):
