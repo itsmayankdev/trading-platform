@@ -28,7 +28,11 @@ export default function PatternSummary({ data }: { data: SearchResponse }) {
     const up = outcomes.filter((outcome) => outcome.forward_return > 0).length;
     const down = outcomes.filter((outcome) => outcome.forward_return < 0).length;
     const flat = outcomes.length - up - down;
-    return { horizon, total: outcomes.length, up, down, flat };
+    const dominantCount = Math.max(up, down, flat);
+    const dominant = dominantCount === 0 ? "No data" : dominantCount === up ? "UP" : dominantCount === down ? "DOWN" : "FLAT";
+    const dominantPct = outcomes.length ? (dominantCount / outcomes.length) * 100 : 0;
+    const consistency = dominantPct >= 70 ? "Strong" : dominantPct >= 55 ? "Lean" : "Mixed";
+    return { horizon, total: outcomes.length, up, down, flat, dominant, dominantPct, consistency };
   });
 
   return (
@@ -47,12 +51,12 @@ export default function PatternSummary({ data }: { data: SearchResponse }) {
         <div className="mb-2 flex items-center justify-between gap-3">
           <div>
             <div className="text-[9px] font-semibold uppercase tracking-[0.14em] text-white/35">Historical direction after match</div>
-            <div className="mt-0.5 text-[9px] text-white/20">Count of retrieved matches that closed up, down, or flat at each horizon.</div>
+            <div className="mt-0.5 text-[9px] text-white/20">Retrieved matches grouped by the direction of the forward close at each horizon.</div>
           </div>
-          <div className="hidden font-mono text-[8px] uppercase tracking-[0.1em] text-white/20 sm:block">N = available outcomes</div>
+          <div className="hidden font-mono text-[8px] uppercase tracking-[0.1em] text-white/20 sm:block">Descriptive · not a forecast</div>
         </div>
         <div className="grid grid-cols-2 gap-1.5 xl:grid-cols-4">
-          {directionRows.map(({ horizon, total, up, down, flat }) => (
+          {directionRows.map(({ horizon, total, up, down, flat, dominant, dominantPct, consistency }) => (
             <div key={horizon} className="rounded-md border border-white/7 bg-white/[0.015] px-3 py-2">
               <div className="flex items-center justify-between">
                 <span className="text-[9px] font-semibold uppercase tracking-[0.12em] text-white/30">+{horizon} candles</span>
@@ -62,6 +66,10 @@ export default function PatternSummary({ data }: { data: SearchResponse }) {
                 <span className="flex items-center gap-1 text-emerald-400"><ArrowUpRight size={11} /> {up}</span>
                 <span className="flex items-center gap-1 text-rose-400"><ArrowDownRight size={11} /> {down}</span>
                 {flat > 0 && <span className="text-white/35">• {flat}</span>}
+              </div>
+              <div className="mt-1.5 flex items-center justify-between border-t border-white/6 pt-1.5 text-[8px] uppercase tracking-[0.1em]">
+                <span className="text-white/20">Dominant {dominant}</span>
+                <span className={consistency === "Strong" ? "text-white/55" : consistency === "Lean" ? "text-white/40" : "text-white/25"}>{consistency} · {dominantPct.toFixed(0)}%</span>
               </div>
             </div>
           ))}
