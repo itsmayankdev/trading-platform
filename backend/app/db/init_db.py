@@ -25,6 +25,9 @@ def init_db() -> None:
         if "first_name" not in columns or "last_name" not in columns:
             conn.execute(text("UPDATE admin_users SET first_name = split_part(trim(display_name), ' ', 1), last_name = CASE WHEN position(' ' in trim(display_name)) > 0 THEN trim(substr(trim(display_name), position(' ' in trim(display_name)) + 1)) ELSE '' END WHERE (first_name = '' OR last_name = '') AND display_name <> ''"))
         conn.execute(text("UPDATE admin_users SET subscription_started_at = created_at WHERE subscription_started_at IS NULL"))
+        # Email identity is case-insensitive: Mayank@Example.com and mayank@example.com
+        # must resolve to the same account. Existing app-created emails are normalized.
+        conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ux_admin_users_email_lower ON admin_users (lower(email))"))
     db = SessionLocal()
     try:
         seed_control_plane(db)
