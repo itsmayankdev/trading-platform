@@ -5,6 +5,7 @@ import { Bell, Check, ChevronDown, CircleAlert, Loader2, Pin, Trash2, WandSparkl
 import Link from "next/link";
 import Sidebar from "@/components/layout/Sidebar";
 import { FAVORITES_CHANGED_EVENT, readFavoritePatterns, type FavoritePattern } from "@/lib/favorites";
+import { MARKET_PATTERNS } from "@/lib/marketPatterns";
 
 type HistoricalMatch = { index: number; start: string; end: string; similarity: number };
 type AlertRule = {
@@ -48,6 +49,7 @@ const PATTERN_GROUPS = [
   { title: "Chart patterns", items: ["Head & Shoulders", "Inverse Head & Shoulders", "Double Top", "Double Bottom", "Triple Top", "Triple Bottom", "Ascending Triangle", "Descending Triangle", "Symmetrical Triangle", "Rising Wedge", "Falling Wedge", "Bull Flag", "Bear Flag", "Pennant", "Rectangle", "Cup & Handle"] },
   { title: "Candlestick patterns", items: ["Doji", "Hammer", "Shooting Star", "Bullish Engulfing", "Bearish Engulfing", "Morning Star", "Evening Star", "Three White Soldiers", "Three Black Crows"] },
 ];
+const READY_NAMED_PATTERNS = new Set(MARKET_PATTERNS.filter((pattern) => pattern.detectionStatus === "ready").map((pattern) => pattern.name));
 
 function formatDate(value: string) {
   return new Date(value).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
@@ -141,34 +143,38 @@ export default function AlertsPage() {
   }, [historical, symbol, timeframe, patternLength]);
 
   const selectedMatch = historicalMatches[selectedHistorical];
-  const selectedCount = Number(current) + Number(favoritesSource) + Number(historical);
-  const canSave = selectedCount > 0 && (!favoritesSource || selectedFavoriteIds.length > 0) && (!historical || Boolean(selectedMatch)) && !named;
+  const selectedCount = Number(current) + Number(favoritesSource) + Number(historical) + Number(named);
+  const canSave = selectedCount > 0 && (!favoritesSource || selectedFavoriteIds.length > 0) && (!historical || Boolean(selectedMatch)) && (!named || namedPatterns.length > 0);
   const summary = useMemo(() => {
     const parts: string[] = [];
     if (current) parts.push("current structure");
     if (favoritesSource) parts.push(selectedFavoriteIds.length === 1 ? "1 pinned chart" : `${selectedFavoriteIds.length} pinned charts`);
     if (historical) parts.push(`historical chart #${selectedHistorical + 1}`);
+    if (named) parts.push(namedPatterns.length === 1 ? namedPatterns[0] : `${namedPatterns.length || "Named"} patterns`);
     return parts.join(" + ");
-  }, [current, favoritesSource, selectedFavoriteIds.length, historical, selectedHistorical]);
+  }, [current, favoritesSource, selectedFavoriteIds.length, historical, selectedHistorical, named, namedPatterns.length]);
 
   function toggleFavorite(id: string) { setSelectedFavoriteIds((items) => items.includes(id) ? items.filter((item) => item !== id) : [...items, id]); }
-  function toggleNamedPattern(name: string) { setNamedPatterns((items) => items.includes(name) ? items.filter((item) => item !== name) : [...items, name]); }
+  function toggleNamedPattern(name: string) {
+    if (!READY_NAMED_PATTERNS.has(name)) return;
+    setNamedPatterns((items) => items.includes(name) ? items.filter((item) => item !== name) : [...items, name]);
+    setTestError("");
+  }
 
   async function evaluate(config: { rule?: AlertRule; live?: boolean } = {}) {
     const rule = config.rule;
     const sourceCurrent = rule ? rule.sources.current : current;
     const sourceFavorites = rule ? rule.sources.favorites : favoritesSource;
     const sourceHistorical = rule ? rule.sources.historical : historical;
+    const sourceNamed = rule ? rule.sources.named : named;
     const favoriteIds = rule?.favoriteIds ?? selectedFavoriteIds;
+    const selectedNamedPatterns = rule?.namedPatterns ?? namedPatterns;
     const selectedIndex = rule?.historicalMatchIndex ?? selectedHistorical;
     const match = historicalMatches[selectedIndex];
-    if (!sourceCurrent && !sourceFavorites && !sourceHistorical) return null;
-    if (rule?.sources.named || named) {
-      setTestError("Named pattern detection is not wired to the evaluator yet. Use current structure, historical charts, or pinned charts for live checks.");
-      return null;
-    }
+    if (!sourceCurrent && !sourceFavorites && !sourceHistorical && !sourceNamed) return null;
     if (sourceFavorites && favoriteIds.length === 0) throw new Error("Select at least one pinned chart");
     if (sourceHistorical && !match) throw new Error("Select a historical chart first");
+    if (sourceNamed && selectedNamedPatterns.length === 0) throw new Error("Select at least one ready named pattern");
 
     const body = {
       symbol: rule?.symbol ?? symbol,
@@ -180,6 +186,8 @@ export default function AlertsPage() {
       current_enabled: sourceCurrent,
       favorites_enabled: sourceFavorites,
       historical_enabled: sourceHistorical,
+      named_enabled: sourceNamed,
+      named_patterns: selectedNamedPatterns,
       match_mode: rule?.matchMode ?? matchMode,
       favorite_windows: favoriteIds.map((id) => { const favorite = favorites.find((item) => item.id === id); return favorite ? { id: favorite.id, start_time: favorite.startTime, end_time: favorite.endTime } : null; }).filter(Boolean),
       historical_window: sourceHistorical && match ? { start_time: match.start, end_time: match.end } : null,
@@ -207,7 +215,7 @@ export default function AlertsPage() {
 
   function addRule() {
     if (!canSave) return;
-    const rule: AlertRule = { id: crypto.randomUUID(), symbol, timeframe, patternLength, sources: { current, favorites: favoritesSource, historical, named }, favoriteIds: favoritesSource ? selectedFavoriteIds : [], historicalMatchIndex: historical ? selectedHistorical : undefined, namedPatterns, similarity, agreement, useHistoricalFilters, matchMode, enabled: true, createdAt: new Date().toISOString() };
+    const rule: AlertRule = { id: crypto.randomUUID(), symbol, timeframe, patternLength, sources: { current, favorites: favoritesSource, historical, named }, favoriteIds: favoritesSource ? selectedFavoriteIds : [], historicalMatchIndex: historical ? selectedHistorical : undefined, namedPatterns: named ? namedPatterns : [], similarity, agreement, useHistoricalFilters, matchMode, enabled: true, createdAt: new Date().toISOString() };
     setRules((items) => [rule, ...items]);
     setSaved(true);
     window.setTimeout(() => setSaved(false), 1800);
@@ -222,7 +230,7 @@ export default function AlertsPage() {
   }
 
   useEffect(() => {
-    const enabledRules = rules.filter((rule) => rule.enabled && !rule.sources.named && (rule.sources.current || rule.sources.favorites || rule.sources.historical));
+    const enabledRules = rules.filter((rule) => rule.enabled && (rule.sources.current || rule.sources.favorites || rule.sources.historical || rule.sources.named));
     if (enabledRules.length === 0) return;
     let cancelled = false;
     const run = async () => {
@@ -250,7 +258,7 @@ export default function AlertsPage() {
             <ToggleCard active={current} onClick={() => setCurrent(!current)} title="Current market structure" description="Find the closest historical analog to the latest market window." />
             <ToggleCard active={favoritesSource} onClick={() => setFavoritesSource(!favoritesSource)} title="Pinned charts" description="Watch for the current market to resemble charts you saved in Favorites." />
             <ToggleCard active={historical} onClick={() => setHistorical(!historical)} title="Chosen historical chart" description="Watch one specific historical window from the current Market Memory search." />
-            <ToggleCard active={named} onClick={() => { setNamed(!named); setTestError("Named pattern detection is planned for the pattern library evaluator."); }} title="Named patterns" description="Chart and candlestick names are visible here, but detection is not live yet." disabled={false} />
+            <ToggleCard active={named} onClick={() => { setNamed(!named); setTestError(""); }} title="Named patterns" description="Detect supported candlestick patterns directly from completed market candles." />
           </div>
 
           {(current || favoritesSource || historical) && <div className="mt-4 rounded-md border border-white/7 bg-white/[0.015] p-4"><div className="grid gap-4 md:grid-cols-3"><label className="text-xs text-white/45">Market<select value={symbol} onChange={(e) => setSymbol(e.target.value)} className={inputClass}><option>BTCUSDT</option><option>ETHUSDT</option><option>SOLUSDT</option></select></label><label className="text-xs text-white/45">Timeframe<select value={timeframe} onChange={(e) => setTimeframe(e.target.value)} className={inputClass}><option>5m</option><option>15m</option><option>1h</option></select></label><label className="text-xs text-white/45">Pattern length<select value={patternLength} onChange={(e) => setPatternLength(Number(e.target.value))} className={inputClass}><option value={30}>30 candles</option><option value={45}>45 candles</option><option value={60}>60 candles</option></select></label></div><div className="mt-4 grid gap-4 md:grid-cols-2"><label className="text-xs text-white/45">Minimum similarity<select value={similarity} onChange={(e) => setSimilarity(Number(e.target.value))} className={inputClass}>{[90,92,94,95,96,97,98].map((n) => <option key={n} value={n}>{n}% or higher</option>)}</select></label><label className="text-xs text-white/45">Minimum historical agreement<select value={agreement} onChange={(e) => setAgreement(Number(e.target.value))} className={inputClass}>{[50,55,60,65,70,75].map((n) => <option key={n} value={n}>{n}% or higher</option>)}</select></label></div><label className="mt-4 flex cursor-pointer items-center gap-2 text-xs text-white/45"><input type="checkbox" checked={useHistoricalFilters} onChange={(e) => setUseHistoricalFilters(e.target.checked)} className="accent-white" />Use historical direction agreement for current-structure alerts</label></div>}
@@ -259,9 +267,9 @@ export default function AlertsPage() {
 
           {historical && <div className="mt-3 rounded-md border border-white/7 bg-white/[0.015] p-4"><div className="flex items-center justify-between"><div><div className="text-xs font-semibold">Choose historical match</div><div className="mt-1 text-[10px] text-white/30">Use the same ranked historical windows shown by Market Memory.</div></div>{loadingMatches && <Loader2 size={15} className="animate-spin text-white/35" />}</div>{historicalMatches.length > 0 ? <div className="mt-3 flex items-center gap-2"><button type="button" onClick={() => setSelectedHistorical((value) => Math.max(0, value - 1))} disabled={selectedHistorical === 0} className="h-9 w-9 rounded-md border border-white/10 text-white/50 disabled:opacity-25">‹</button><select value={selectedHistorical} onChange={(e) => setSelectedHistorical(Number(e.target.value))} className={inputClass + " mt-0 flex-1"}>{historicalMatches.map((match) => <option key={match.index} value={match.index}>#{match.index + 1} · {match.similarity.toFixed(1)}% · {formatDate(match.start)}</option>)}</select><button type="button" onClick={() => setSelectedHistorical((value) => Math.min(historicalMatches.length - 1, value + 1))} disabled={selectedHistorical >= historicalMatches.length - 1} className="h-9 w-9 rounded-md border border-white/10 text-white/50 disabled:opacity-25">›</button></div> : <div className="mt-3 text-xs text-white/30">{loadingMatches ? "Loading historical matches…" : "No historical matches available."}</div>}</div>}
 
-          {named && <div className="mt-3 rounded-md border border-amber-200/10 bg-amber-200/[0.025] p-4"><div className="flex items-center gap-2"><WandSparkles size={14} className="text-amber-200/70" /><div><div className="text-xs font-semibold">Pattern library</div><div className="mt-1 text-[10px] text-white/30">These names are the library catalog. The detector will be connected after the evaluator has real pattern definitions.</div></div></div><div className="mt-3 grid gap-2 md:grid-cols-2">{PATTERN_GROUPS.map((group) => <div key={group.title}><div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-white/25">{group.title}</div><div className="flex flex-wrap gap-1.5">{group.items.map((item) => <button key={item} type="button" onClick={() => toggleNamedPattern(item)} className={`rounded-md border px-2.5 py-1.5 text-[10px] ${namedPatterns.includes(item) ? "border-amber-200/30 bg-amber-200/[0.08] text-amber-100" : "border-white/8 text-white/40 hover:text-white/60"}`}>{item}</button>)}</div></div>)}</div></div>}
+          {named && <div className="mt-3 rounded-md border border-amber-200/10 bg-amber-200/[0.025] p-4"><div className="flex items-center gap-2"><WandSparkles size={14} className="text-amber-200/70" /><div><div className="text-xs font-semibold">Pattern library</div><div className="mt-1 text-[10px] text-white/30">Five candlestick detectors are live now. Chart-pattern geometry and the remaining candlestick definitions stay marked as planned until their detectors are implemented.</div></div></div>{PATTERN_GROUPS.map((group) => <div key={group.title} className="mt-3"><div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-white/25">{group.title}</div><div className="flex flex-wrap gap-1.5">{group.items.map((item) => { const ready = READY_NAMED_PATTERNS.has(item); const selected = namedPatterns.includes(item); return <button key={item} type="button" disabled={!ready} onClick={() => toggleNamedPattern(item)} title={ready ? "Detector ready" : "Detector planned — not live yet"} className={`rounded-md border px-2.5 py-1.5 text-[10px] transition ${!ready ? "cursor-not-allowed border-white/5 text-white/20" : selected ? "border-amber-200/30 bg-amber-200/[0.08] text-amber-100" : "border-white/8 text-white/40 hover:text-white/60"}`}>{item}{!ready && <span className="ml-1 text-[8px] uppercase tracking-wide text-white/20">planned</span>}</button>; })}</div></div>)}</div>}
 
-          <div className="mt-4 flex flex-col gap-3 border-t border-white/7 pt-4 sm:flex-row sm:items-center sm:justify-between"><div className="flex items-center gap-2"><span className="text-xs text-white/35">Combine sources:</span><button type="button" onClick={() => setMatchMode(matchMode === "any" ? "all" : "any")} className="flex items-center gap-1 rounded-md border border-white/10 px-2.5 py-1.5 text-[10px] font-semibold text-white/55">{matchMode === "any" ? "ANY source" : "ALL sources"}<ChevronDown size={12} /></button></div><div className="flex flex-wrap gap-2"><button type="button" onClick={enableNotifications} className="rounded-md border border-white/10 px-3 py-2 text-xs font-semibold text-white/55 hover:bg-white/[0.03]">Enable notifications</button><button type="button" disabled={testing || !selectedCount || named} onClick={() => void testAlert()} className="flex items-center justify-center gap-2 rounded-md border border-amber-200/25 bg-amber-200/[0.08] px-4 py-2 text-xs font-semibold text-amber-100 disabled:cursor-not-allowed disabled:opacity-35">{testing && <Loader2 size={13} className="animate-spin" />}Test alert now</button><button type="button" disabled={!canSave} onClick={addRule} className="rounded-md bg-white px-4 py-2 text-xs font-semibold text-black disabled:cursor-not-allowed disabled:opacity-25">{saved ? "Saved" : "Save alert"}</button></div></div>
+          <div className="mt-4 flex flex-col gap-3 border-t border-white/7 pt-4 sm:flex-row sm:items-center sm:justify-between"><div className="flex items-center gap-2"><span className="text-xs text-white/35">Combine sources:</span><button type="button" onClick={() => setMatchMode(matchMode === "any" ? "all" : "any")} className="flex items-center gap-1 rounded-md border border-white/10 px-2.5 py-1.5 text-[10px] font-semibold text-white/55">{matchMode === "any" ? "ANY source" : "ALL sources"}<ChevronDown size={12} /></button></div><div className="flex flex-wrap gap-2"><button type="button" onClick={enableNotifications} className="rounded-md border border-white/10 px-3 py-2 text-xs font-semibold text-white/55 hover:bg-white/[0.03]">Enable notifications</button><button type="button" disabled={testing || !selectedCount || (named && namedPatterns.length === 0)} onClick={() => void testAlert()} className="flex items-center justify-center gap-2 rounded-md border border-amber-200/25 bg-amber-200/[0.08] px-4 py-2 text-xs font-semibold text-amber-100 disabled:cursor-not-allowed disabled:opacity-35">{testing && <Loader2 size={13} className="animate-spin" />}Test alert now</button><button type="button" disabled={!canSave} onClick={addRule} className="rounded-md bg-white px-4 py-2 text-xs font-semibold text-black disabled:cursor-not-allowed disabled:opacity-25">{saved ? "Saved" : "Save alert"}</button></div></div>
         </section>
 
         {(evaluation || testError) && <section className={`mt-4 rounded-lg border p-4 ${evaluation?.triggered ? "border-amber-200/25 bg-amber-200/[0.045]" : "border-white/8 bg-[#0a0e15]"}`}><div className="flex flex-wrap items-start justify-between gap-3"><div><div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-white/30">Latest evaluation</div><div className="mt-1 flex items-center gap-2 text-lg font-semibold">{evaluation ? (evaluation.triggered ? "Triggered" : "Not triggered") : "Evaluation unavailable"}{evaluation?.triggered && <Zap size={16} className="text-amber-200" />}</div></div>{evaluation && <div className="text-right text-[10px] text-white/30">Evaluated at {formatDate(evaluation.evaluated_at)}<br />Algorithm {evaluation.sources.length ? "similarity_v1" : "—"}</div>}</div>{testError && <div className="mt-3 flex items-start gap-2 rounded-md border border-red-300/10 bg-red-300/[0.035] p-3 text-xs leading-5 text-white/55"><CircleAlert size={14} className="mt-0.5 shrink-0 text-red-200/60" />{testError}</div>}{evaluation && <div className="mt-4 grid gap-2 md:grid-cols-3">{evaluation.sources.map((source) => <div key={source.source} className="rounded-md border border-white/7 bg-white/[0.015] p-3"><div className="flex items-center justify-between gap-2"><span className="text-xs font-semibold capitalize">{source.source.replace("_", " ")}</span><span className={`text-[10px] font-semibold ${source.matched ? "text-amber-200" : "text-white/30"}`}>{source.matched ? "MATCH" : "NO MATCH"}</span></div>{source.similarity != null && <div className="mt-2 font-mono text-sm">{source.similarity.toFixed(1)}% <span className="font-sans text-[10px] text-white/25">similarity</span></div>}{source.direction_agreement != null && <div className="mt-1 text-[10px] text-white/35">{source.direction_agreement.toFixed(0)}% directional agreement · {source.agreement_sample ?? 0} historical matches</div>}<div className="mt-2 text-[10px] leading-4 text-white/30">{source.reason}</div></div>)}</div>}</section>}
