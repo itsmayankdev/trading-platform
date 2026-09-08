@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
+import NotificationCenter from "@/components/layout/NotificationCenter";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -24,7 +25,14 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full">{children}</body>
+      <body className="min-h-full">
+        <div className="relative min-h-full">
+          <div className="fixed right-4 top-2 z-[60] sm:right-5">
+            <NotificationCenter />
+          </div>
+          {children}
+        </div>
+      </body>
     </html>
   );
 }
