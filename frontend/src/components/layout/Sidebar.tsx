@@ -14,7 +14,7 @@ const MENU: MenuItem[] = [
   { label: "Market Scanner", href: "/scanner", icon: ScanSearch, live: true },
   { label: "Pattern Alerts", href: "/alerts", icon: Bell, live: true },
   { label: "Replay Lab", href: "/replay", icon: Activity, live: true },
-  { label: "Evaluation Lab", href: "/evaluation", icon: FlaskConical },
+  { label: "Evaluation Lab", href: "/evaluation", icon: FlaskConical, live: true },
 ];
 
 export default function Sidebar({ symbol, collapsed, onCollapsedChange, onSymbolSelect, selectedSymbols, onWatchlistToggle }: SidebarProps) {
