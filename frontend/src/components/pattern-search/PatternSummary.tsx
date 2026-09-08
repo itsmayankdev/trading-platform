@@ -1,4 +1,4 @@
-import { BarChart3, Clock3, Database, Gauge } from "lucide-react";
+import { ArrowDownRight, ArrowUpRight, BarChart3, Clock3, Database, Gauge } from "lucide-react";
 import type { SearchResponse } from "./types";
 
 function pct(value: number) {
@@ -23,6 +23,14 @@ export default function PatternSummary({ data }: { data: SearchResponse }) {
     { icon: Clock3, label: "Current window", value: data.current_pattern.end_time ? formatDate(data.current_pattern.end_time) : "—", detail: `${data.pattern_length} candles · ${data.timeframe}` },
   ];
 
+  const directionRows = [5, 15, 30, 60].map((horizon) => {
+    const outcomes = data.matches.flatMap((match) => match.outcomes.filter((outcome) => outcome.horizon_candles === horizon));
+    const up = outcomes.filter((outcome) => outcome.forward_return > 0).length;
+    const down = outcomes.filter((outcome) => outcome.forward_return < 0).length;
+    const flat = outcomes.length - up - down;
+    return { horizon, total: outcomes.length, up, down, flat };
+  });
+
   return (
     <section className="panel overflow-hidden">
       <div className="grid grid-cols-2 divide-x divide-y divide-white/7 lg:grid-cols-4 lg:divide-y-0">
@@ -34,6 +42,32 @@ export default function PatternSummary({ data }: { data: SearchResponse }) {
           </div>
         ))}
       </div>
+
+      <div className="border-t border-white/7 px-4 py-2.5">
+        <div className="mb-2 flex items-center justify-between gap-3">
+          <div>
+            <div className="text-[9px] font-semibold uppercase tracking-[0.14em] text-white/35">Historical direction after match</div>
+            <div className="mt-0.5 text-[9px] text-white/20">Count of retrieved matches that closed up, down, or flat at each horizon.</div>
+          </div>
+          <div className="hidden font-mono text-[8px] uppercase tracking-[0.1em] text-white/20 sm:block">N = available outcomes</div>
+        </div>
+        <div className="grid grid-cols-2 gap-1.5 xl:grid-cols-4">
+          {directionRows.map(({ horizon, total, up, down, flat }) => (
+            <div key={horizon} className="rounded-md border border-white/7 bg-white/[0.015] px-3 py-2">
+              <div className="flex items-center justify-between">
+                <span className="text-[9px] font-semibold uppercase tracking-[0.12em] text-white/30">+{horizon} candles</span>
+                <span className="font-mono text-[8px] text-white/20">N {total}</span>
+              </div>
+              <div className="mt-1.5 flex items-center gap-3 font-mono text-[10px] tabular-nums">
+                <span className="flex items-center gap-1 text-emerald-400"><ArrowUpRight size={11} /> {up}</span>
+                <span className="flex items-center gap-1 text-rose-400"><ArrowDownRight size={11} /> {down}</span>
+                {flat > 0 && <span className="text-white/35">• {flat}</span>}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
       {topMatch && bestStatistic && <div className="border-t border-white/7 px-4 py-2 text-[9px] text-white/25">
         Strongest historical analogue currently ranks at <span className="font-mono text-white/45">{topMatch.similarity_score.toFixed(2)}%</span> similarity. The displayed evidence is descriptive historical data; it is not a probability or forecast. At +{bestStatistic.horizon_candles} candles, the sample shows a median return of <span className={bestStatistic.median_return >= 0 ? "text-emerald-400/70" : "text-rose-400/70"}>{pct(bestStatistic.median_return)}</span>.
       </div>}
