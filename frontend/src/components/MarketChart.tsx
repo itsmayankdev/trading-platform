@@ -141,7 +141,7 @@ export default function MarketChart({ symbol, timeframe, patternLength, highligh
   return (
     <div ref={containerRef} onMouseLeave={hideTooltip} className={`group relative w-full ${dashboardFullscreen ? "min-h-0 flex-1" : "h-[380px]"}`}>
       <div ref={tooltipRef} className="pointer-events-none absolute z-50 w-[134px] rounded-md border border-white/10 bg-[#090d13]/95 px-2 py-1.5 opacity-0 shadow-2xl backdrop-blur-sm transition-opacity" />
-      <div className="pointer-events-none absolute right-2 top-2 z-30 flex gap-1 opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
+      <div onMouseEnter={hideTooltip} className="pointer-events-none absolute right-2 top-2 z-30 flex gap-1 opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
         <button type="button" aria-label="Fit chart to visible candles" title="Fit chart" onClick={fitChart} className="pointer-events-auto flex h-7 items-center gap-1 rounded border border-white/10 bg-[#090d13]/90 px-2 text-[8px] font-semibold uppercase tracking-[0.1em] text-white/60 shadow-lg backdrop-blur hover:text-white"><RotateCcw size={11} /> Fit</button>
         <button type="button" aria-label={dashboardFullscreen ? "Exit fullscreen" : "Open both charts fullscreen"} title={dashboardFullscreen ? "Exit fullscreen" : "Open both charts fullscreen"} onClick={onFullscreenToggle} className="pointer-events-auto flex h-7 items-center justify-center rounded border border-white/10 bg-[#090d13]/90 px-2 text-white/60 shadow-lg backdrop-blur hover:text-white">{dashboardFullscreen ? <Minimize2 size={12} /> : <Maximize2 size={12} />}</button>
       </div>
