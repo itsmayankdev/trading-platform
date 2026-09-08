@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Body, Depends, Request, Response
 from fastapi.responses import JSONResponse
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 from backend.app.admin.control import audit, clear_admin_cookie, require_admin, set_admin_cookie, user_access, verify_owner_credentials
 from backend.app.auth.user_auth import hash_password
@@ -12,10 +13,8 @@ router=APIRouter(prefix="/api/v1/admin",tags=["admin"])
 
 def _parse_dt(value:str|None):
     if not value:return None
-    try:
-        return datetime.fromisoformat(value.replace("Z","+00:00"))
-    except ValueError:
-        return None
+    try:return datetime.fromisoformat(value.replace("Z","+00:00"))
+    except ValueError:return None
 
 def _user(db:Session,user_id:int)->AdminUser:
     user=db.scalar(select(AdminUser).options(selectinload(AdminUser.roles).selectinload(AdminRole.permissions),selectinload(AdminUser.permissions),selectinload(AdminUser.module_overrides),selectinload(AdminUser.plan)).where(AdminUser.id==user_id))
@@ -51,8 +50,7 @@ def overview(request:Request,db:Session=Depends(get_db)):
 
 @router.get("/users")
 def users(request:Request,q:str="",status:str="",plan_id:int|None=None,enrolled_from:str="",enrolled_to:str="",ends_from:str="",ends_to:str="",limit:int=50,offset:int=0,db:Session=Depends(get_db)):
-    require_admin(request)
-    limit=max(1,min(limit,100));offset=max(0,offset)
+    require_admin(request);limit=max(1,min(limit,100));offset=max(0,offset)
     stmt=select(AdminUser).options(selectinload(AdminUser.roles),selectinload(AdminUser.plan)).order_by(AdminUser.created_at.desc()).offset(offset).limit(limit)
     if q:stmt=stmt.where((AdminUser.email.ilike(f"%{q}%"))|(AdminUser.display_name.ilike(f"%{q}%"))|(AdminUser.first_name.ilike(f"%{q}%"))|(AdminUser.last_name.ilike(f"%{q}%")))
     if status:stmt=stmt.where(AdminUser.status==status)
@@ -69,16 +67,28 @@ def users(request:Request,q:str="",status:str="",plan_id:int|None=None,enrolled_
 
 @router.post("/users")
 def create_user(request:Request,body:dict=Body(...),db:Session=Depends(get_db)):
-    actor=require_admin(request);email=str(body.get("email","")).strip().lower();password=str(body.get("password",""));
+    actor=require_admin(request);email=str(body.get("email","")).strip().lower();password=str(body.get("password",""))
     if not email or "@" not in email:return JSONResponse(status_code=400,content={"detail":"Valid email is required"})
     if not password:return JSONResponse(status_code=400,content={"detail":"Password is required"})
-    if db.scalar(select(AdminUser).where(AdminUser.email==email)):return JSONResponse(status_code=409,content={"detail":"User already exists"})
+    if len(password)<8:return JSONResponse(status_code=400,content={"detail":"Password must be at least 8 characters"})
+    if db.scalar(select(AdminUser).where(AdminUser.email==email)):return JSONResponse(status_code=409,content={"detail":"An account with this email already exists. Use a different email."})
     display_name=str(body.get("display_name","")).strip();started=_parse_dt(body.get("subscription_started_at")) or datetime.now(timezone.utc);ends=_parse_dt(body.get("subscription_ends_at"))
+    if body.get("subscription_started_at") and started is None:return JSONResponse(status_code=400,content={"detail":"Invalid enrollment date"})
+    if body.get("subscription_ends_at") and ends is None:return JSONResponse(status_code=400,content={"detail":"Invalid subscription end date"})
+    if ends and started and ends<started:return JSONResponse(status_code=400,content={"detail":"Subscription end date cannot be before enrollment date"})
     user=AdminUser(email=email,display_name=display_name,first_name=str(body.get("first_name","")).strip(),last_name=str(body.get("last_name","")).strip(),password_hash=hash_password(password),status=str(body.get("status","active")),subscription_started_at=started,subscription_ends_at=ends);plan_id=body.get("plan_id")
-    if plan_id is not None:user.plan_id=int(plan_id)
-    db.add(user);db.flush();role_ids=[int(x) for x in body.get("role_ids",[])];
-    if role_ids:user.roles=list(db.scalars(select(AdminRole).where(AdminRole.id.in_(role_ids))).all())
-    audit(db,actor,"user.created","user",str(user.id),{"email":user.email});db.commit();return _serialize_user(_user(db,user.id))
+    if plan_id is not None:
+        try:user.plan_id=int(plan_id)
+        except (TypeError,ValueError):return JSONResponse(status_code=400,content={"detail":"Invalid plan"})
+    db.add(user)
+    try:
+        db.flush();role_ids=[int(x) for x in body.get("role_ids",[])]
+        if role_ids:user.roles=list(db.scalars(select(AdminRole).where(AdminRole.id.in_(role_ids))).all())
+        audit(db,actor,"user.created","user",str(user.id),{"email":user.email});db.commit();return _serialize_user(_user(db,user.id))
+    except IntegrityError:
+        db.rollback();return JSONResponse(status_code=409,content={"detail":"An account with this email already exists. Use a different email."})
+    except ValueError as exc:
+        db.rollback();return JSONResponse(status_code=400,content={"detail":str(exc)})
 
 @router.get("/users/{user_id}")
 def user_detail(user_id:int,request:Request,db:Session=Depends(get_db)):
@@ -93,7 +103,9 @@ def update_user(user_id:int,request:Request,body:dict=Body(...),db:Session=Depen
     except ValueError as exc:return JSONResponse(status_code=404,content={"detail":str(exc)})
     for field in ("display_name","first_name","last_name","status"):
         if field in body:setattr(user,field,str(body[field]))
-    if "password" in body and body["password"]:user.password_hash=hash_password(str(body["password"]))
+    if "password" in body and body["password"]:
+        try:user.password_hash=hash_password(str(body["password"]))
+        except ValueError as exc:return JSONResponse(status_code=400,content={"detail":str(exc)})
     if "plan_id" in body:user.plan_id=int(body["plan_id"]) if body["plan_id"] is not None else None
     if "subscription_started_at" in body:user.subscription_started_at=_parse_dt(body.get("subscription_started_at"))
     if "subscription_ends_at" in body:user.subscription_ends_at=_parse_dt(body.get("subscription_ends_at"))
