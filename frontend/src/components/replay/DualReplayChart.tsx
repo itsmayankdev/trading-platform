@@ -21,13 +21,7 @@ function setup(container: HTMLDivElement): ChartState {
     handleScroll: false,
     handleScale: false,
   });
-  const series = chart.addSeries(CandlestickSeries, {
-    upColor: "#22c55e",
-    downColor: "#ef4444",
-    borderVisible: false,
-    wickUpColor: "#22c55e",
-    wickDownColor: "#ef4444",
-  });
+  const series = chart.addSeries(CandlestickSeries, { upColor: "#22c55e", downColor: "#ef4444", borderVisible: false, wickUpColor: "#22c55e", wickDownColor: "#ef4444" });
   return { chart, series };
 }
 
@@ -60,7 +54,6 @@ export default function DualReplayChart({ currentCandles, currentIndex, patternL
   const rightState = useRef<ChartState | null>(null);
   const leftHighlight = useRef<HTMLDivElement | null>(null);
   const rightHighlight = useRef<HTMLDivElement | null>(null);
-
   const current = useMemo(() => chartWindow(currentCandles, currentIndex, patternLength), [currentCandles, currentIndex, patternLength]);
   const historicalStart = useMemo(() => {
     if (!match || !historicalCandles.length) return undefined;
@@ -112,7 +105,7 @@ export default function DualReplayChart({ currentCandles, currentIndex, patternL
     };
     place(left.chart, leftHighlight.current, current.highlightFrom, current.highlightTo, current.data.length);
     place(right.chart, rightHighlight.current, historical.highlightFrom, historical.highlightTo, historical.data.length);
-  }, [current, historical]);
+  }, [current, historical, highlightLocked]);
 
   useEffect(() => {
     const left = leftState.current;
@@ -149,28 +142,13 @@ export default function DualReplayChart({ currentCandles, currentIndex, patternL
   return (
     <div className="grid gap-3 lg:grid-cols-2">
       <section className="overflow-hidden rounded-md border border-amber-300/15 bg-[#0d1219]">
-        <div className="flex items-center justify-between border-b border-white/8 px-3 py-2">
-          <div><div className="text-[9px] font-semibold uppercase tracking-[0.13em] text-white/30">Replay · Current</div><div className="mt-0.5 text-[11px] font-semibold text-white/75">{current.lastTime != null ? formatUtc(current.lastTime) : "Selected replay point"}</div></div>
-          <span className="rounded bg-amber-300/10 px-1.5 py-0.5 text-[8px] font-semibold uppercase tracking-[0.08em] text-amber-200">Current</span>
-        </div>
-        <div className="relative">
-          <div ref={leftRef} className="h-[380px] w-full" />
-          {highlightLocked && <div ref={leftHighlight} className="pointer-events-none absolute bottom-0 top-0 border border-amber-300/65 bg-amber-300/[0.06]"><span className="absolute left-1 top-1 rounded bg-amber-300/90 px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-[0.1em] text-black">Matched {patternLength}</span></div>}
-          {playing && <div className="absolute inset-0 z-20 cursor-not-allowed" aria-hidden="true" />}
-        </div>
+        <div className="flex items-center justify-between border-b border-white/8 px-3 py-2"><div><div className="text-[9px] font-semibold uppercase tracking-[0.13em] text-white/30">Replay · Current</div><div className="mt-0.5 text-[11px] font-semibold text-white/75">{current.lastTime != null ? formatUtc(current.lastTime) : "Selected replay point"}</div></div><span className="rounded bg-amber-300/10 px-1.5 py-0.5 text-[8px] font-semibold uppercase tracking-[0.08em] text-amber-200">Current</span></div>
+        <div className="relative"><div ref={leftRef} className="h-[380px] w-full" />{highlightLocked && <div ref={leftHighlight} className="pointer-events-none absolute bottom-0 top-0 border border-amber-300/65 bg-amber-300/[0.06]"><span className="absolute left-1 top-1 rounded bg-amber-300/90 px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-[0.1em] text-black">Matched {patternLength}</span></div>}{playing && <div className="absolute inset-0 z-20 cursor-not-allowed" aria-hidden="true" />}</div>
         <div className="border-t border-white/8 px-3 py-2 text-[8px] uppercase tracking-[0.08em] text-white/25">{highlightLocked ? `HLT locked · exact replay pattern · ${patternLength} candles` : "HLT off · chart movable"} · actual market prices/time</div>
       </section>
-
       <section className="overflow-hidden rounded-md border border-white/10 bg-[#0d1219]">
-        <div className="flex items-center justify-between border-b border-white/8 px-3 py-2">
-          <div><div className="text-[9px] font-semibold uppercase tracking-[0.13em] text-white/30">Historical match</div><div className="mt-0.5 text-[11px] font-semibold text-white/75">{match ? `${match.similarity_score.toFixed(2)}% similarity` : "Search Memory to compare"}</div></div>
-          {match && <span className="font-mono text-[8px] text-white/25">{formatUtc(new Date(match.end_time).getTime() / 1000)}</span>}
-        </div>
-        <div className="relative">
-          <div ref={rightRef} className="h-[380px] w-full" />
-          {highlightLocked && <div ref={rightHighlight} className="pointer-events-none absolute bottom-0 top-0 border border-amber-300/65 bg-amber-300/[0.06]"><span className="absolute left-1 top-1 rounded bg-amber-300/90 px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-[0.1em] text-black">Matched {patternLength}</span></div>}
-          {playing && <div className="absolute inset-0 z-20 cursor-not-allowed" aria-hidden="true" />}
-        </div>
+        <div className="flex items-center justify-between border-b border-white/8 px-3 py-2"><div><div className="text-[9px] font-semibold uppercase tracking-[0.13em] text-white/30">Historical match</div><div className="mt-0.5 text-[11px] font-semibold text-white/75">{match ? `${match.similarity_score.toFixed(2)}% similarity` : "Search Memory to compare"}</div></div>{match && <span className="font-mono text-[8px] text-white/25">{formatUtc(new Date(match.end_time).getTime() / 1000)}</span>}</div>
+        <div className="relative"><div ref={rightRef} className="h-[380px] w-full" />{highlightLocked && <div ref={rightHighlight} className="pointer-events-none absolute bottom-0 top-0 border border-amber-300/65 bg-amber-300/[0.06]"><span className="absolute left-1 top-1 rounded bg-amber-300/90 px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-[0.1em] text-black">Matched {patternLength}</span></div>}{playing && <div className="absolute inset-0 z-20 cursor-not-allowed" aria-hidden="true" />}</div>
         <div className="border-t border-white/8 px-3 py-2 text-[8px] uppercase tracking-[0.08em] text-white/25">{highlightLocked ? "HLT locked · exact historical match · future candles reveal with replay" : "HLT off · chart movable"} · actual market prices/time</div>
       </section>
     </div>
