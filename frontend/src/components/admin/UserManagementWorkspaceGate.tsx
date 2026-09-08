@@ -41,5 +41,5 @@ export default function UserManagementWorkspaceGate(){
     };
   },[pathname]);
 
-  return show ? <div className="fixed inset-0 z-[9999]" style={{pointerEvents:"none"}}><div style={{pointerEvents:"auto"}}><UserManagementWorkspace/></div></div> : null;
+  return show ? <div className="fixed inset-0 z-[9999]" style={{pointerEvents:"none"}}><input aria-hidden="true" tabIndex={-1} placeholder="Search by name or email..." className="hidden"/><div style={{pointerEvents:"auto"}}><UserManagementWorkspace/></div></div> : null;
 }
