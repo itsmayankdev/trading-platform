@@ -13,6 +13,11 @@ class Settings(BaseSettings):
     binance_api_key: str = ""
     binance_api_secret: str = ""
 
+    # Owner-only control plane. Keep these outside source control in production.
+    admin_email: str = ""
+    admin_password: str = ""
+    admin_session_secret: str = ""
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
