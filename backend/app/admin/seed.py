@@ -22,9 +22,9 @@ def seed_control_plane(db:Session)->None:
         elif code=="viewer":role.permissions=[p for p in all_permissions if p.operation=="view" and p.module!="admin"]
     for code,name,description,price in [("free","Free","Starter access",0),("pro","Pro","Full research access",0),("enterprise","Enterprise","Team and advanced access",0)]:
         if not db.scalar(select(AdminPlan).where(AdminPlan.code==code)):db.add(AdminPlan(code=code,name=name,description=description,price_cents=price,active=True))
-    db.flush();demo_email=os.getenv("DEMO_USER_EMAIL","demo-user@marketmemory.local").strip().lower();demo_password=os.getenv("DEMO_USER_PASSWORD","DemoUser@2026");demo=db.scalar(select(AdminUser).where(AdminUser.email==demo_email))
+    db.flush();demo_email=os.getenv("DEMO_USER_EMAIL","demo-user@marketmemory.local").strip().lower();demo_password=os.getenv("DEMO_USER_PASSWORD","DemoUser@2026");demo=db.scalar(select(AdminUser).where(AdminUser.email==demo_email));analyst=db.scalar(select(AdminRole).where(AdminRole.code=="analyst"));pro_id=db.scalar(select(AdminPlan.id).where(AdminPlan.code=="pro"))
     if not demo:
-        demo=AdminUser(email=demo_email,display_name="Demo User",password_hash=hash_password(demo_password),status="active",plan_id=db.scalar(select(AdminPlan.id).where(AdminPlan.code=="pro")));role=db.scalar(select(AdminRole).where(AdminRole.code=="analyst"));
-        if role:demo.roles=[role]
-        db.add(demo)
+        demo=AdminUser(email=demo_email,display_name="Demo User",password_hash=hash_password(demo_password),status="active",plan_id=pro_id);demo.roles=[analyst] if analyst else [];db.add(demo)
+    elif demo_email=="demo-user@marketmemory.local":
+        demo.status="active";demo.plan_id=pro_id;demo.roles=[analyst] if analyst else []
     db.commit()
