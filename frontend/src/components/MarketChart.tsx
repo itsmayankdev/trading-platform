@@ -93,16 +93,13 @@ export default function MarketChart({ symbol, timeframe, patternLength, highligh
         return;
       }
       const change = candle.open !== 0 ? ((candle.close - candle.open) / candle.open) * 100 : 0;
-      tooltip.innerHTML = `<div class="mb-1 font-mono text-[9px] text-white/40">${formatCandleTime(candle.time)} UTC</div><div class="grid grid-cols-2 gap-x-3 gap-y-1 font-mono text-[10px]"><span class="text-white/35">O <b class="font-medium text-white/75">${formatNumber(candle.open)}</b></span><span class="text-white/35">H <b class="font-medium text-white/75">${formatNumber(candle.high)}</b></span><span class="text-white/35">L <b class="font-medium text-white/75">${formatNumber(candle.low)}</b></span><span class="text-white/35">C <b class="font-medium ${change >= 0 ? "text-emerald-300" : "text-rose-300"}">${formatNumber(candle.close)}</b></span><span class="col-span-2 text-white/35">VOL <b class="font-medium text-white/70">${formatVolume(candle.volume)}</b></span></div>`;
+      const matched = candlesRef.current.length >= patternLength && candlesRef.current.indexOf(candle) >= candlesRef.current.length - patternLength;
+      tooltip.innerHTML = `<div class="mb-1 font-mono text-[9px] text-white/40">${formatCandleTime(candle.time)} UTC</div><div class="grid grid-cols-2 gap-x-3 gap-y-1 font-mono text-[10px]"><span class="text-white/35">O <b class="font-medium text-white/75">${formatNumber(candle.open)}</b></span><span class="text-white/35">H <b class="font-medium text-white/75">${formatNumber(candle.high)}</b></span><span class="text-white/35">L <b class="font-medium text-white/75">${formatNumber(candle.low)}</b></span><span class="text-white/35">C <b class="font-medium ${change >= 0 ? "text-emerald-300" : "text-rose-300"}">${formatNumber(candle.close)}</b></span><span class="col-span-2 text-white/35">VOL <b class="font-medium text-white/70">${formatVolume(candle.volume)}</b></span>${matched ? '<span class="col-span-2 mt-0.5 border-t border-amber-300/10 pt-1 text-[8px] font-semibold uppercase tracking-[0.08em] text-amber-200/80">Matched pattern candle</span>' : ""}</div>`;
       const x = Math.min(Math.max(param.point.x + 12, 8), container.clientWidth - 142);
       const y = Math.min(Math.max(param.point.y - 18, 8), container.clientHeight - 82);
       tooltip.style.left = `${x}px`;
       tooltip.style.top = `${y}px`;
       tooltip.style.opacity = "1";
-    }
-
-    function handleCrosshairLeave() {
-      if (tooltipRef.current) tooltipRef.current.style.opacity = "0";
     }
 
     chart.subscribeCrosshairMove(handleCrosshairMove);
@@ -154,9 +151,8 @@ export default function MarketChart({ symbol, timeframe, patternLength, highligh
         <button type="button" aria-label="Fit chart to visible candles" title="Fit chart" onClick={fitChart} className="pointer-events-auto flex h-7 items-center gap-1 rounded border border-white/10 bg-[#090d13]/90 px-2 text-[8px] font-semibold uppercase tracking-[0.1em] text-white/60 shadow-lg backdrop-blur hover:text-white"><RotateCcw size={11} /> Fit</button>
         <button type="button" aria-label={fullscreen ? "Exit fullscreen" : "Open chart fullscreen"} title={fullscreen ? "Exit fullscreen" : "Fullscreen"} onClick={() => void toggleFullscreen()} className="pointer-events-auto flex h-7 items-center justify-center rounded border border-white/10 bg-[#090d13]/90 px-2 text-white/60 shadow-lg backdrop-blur hover:text-white">{fullscreen ? <Minimize2 size={12} /> : <Maximize2 size={12} />}</button>
       </div>
-      {highlightLocked && <div ref={patternBoxRef} className="group pointer-events-auto absolute bottom-[28px] top-[8px] z-10 border border-amber-300/75 bg-amber-300/[0.07]" title={`Highlighted area = the matched ${patternLength}-candle pattern`}>
-        <span className="absolute left-1 top-1 rounded bg-amber-300/90 px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-[0.1em] text-black">Matched {patternLength}</span>
-        <span className="pointer-events-none absolute left-1/2 top-9 hidden -translate-x-1/2 whitespace-nowrap rounded border border-white/10 bg-[#090d13] px-2 py-1 text-[9px] font-medium normal-case tracking-normal text-white/75 shadow-xl group-hover:block">Highlighted area = matched {patternLength} candles</span>
+      {highlightLocked && <div ref={patternBoxRef} className="pointer-events-none absolute bottom-[28px] top-[8px] z-10 border border-amber-300/75 bg-amber-300/[0.07]" title={`Highlighted area = the matched ${patternLength}-candle pattern. Hover a candle to see OHLCV and match context.`}>
+        <span className="pointer-events-none absolute left-1 top-1 rounded bg-amber-300/90 px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-[0.1em] text-black">Matched {patternLength}</span>
       </div>}
       {!highlightLocked && <div className="pointer-events-none absolute right-2 top-10 z-10 rounded bg-black/35 px-1.5 py-1 text-[8px] uppercase tracking-[0.1em] text-white/25">HLT off · chart movable</div>}
     </div>
