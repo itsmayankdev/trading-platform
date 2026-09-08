@@ -18,8 +18,13 @@ def init_db() -> None:
             conn.execute(text("ALTER TABLE admin_users ADD COLUMN first_name VARCHAR(80) NOT NULL DEFAULT ''"))
         if "last_name" not in columns:
             conn.execute(text("ALTER TABLE admin_users ADD COLUMN last_name VARCHAR(80) NOT NULL DEFAULT ''"))
+        if "subscription_started_at" not in columns:
+            conn.execute(text("ALTER TABLE admin_users ADD COLUMN subscription_started_at TIMESTAMPTZ NULL"))
+        if "subscription_ends_at" not in columns:
+            conn.execute(text("ALTER TABLE admin_users ADD COLUMN subscription_ends_at TIMESTAMPTZ NULL"))
         if "first_name" not in columns or "last_name" not in columns:
             conn.execute(text("UPDATE admin_users SET first_name = split_part(trim(display_name), ' ', 1), last_name = CASE WHEN position(' ' in trim(display_name)) > 0 THEN trim(substr(trim(display_name), position(' ' in trim(display_name)) + 1)) ELSE '' END WHERE (first_name = '' OR last_name = '') AND display_name <> ''"))
+        conn.execute(text("UPDATE admin_users SET subscription_started_at = created_at WHERE subscription_started_at IS NULL"))
     db = SessionLocal()
     try:
         seed_control_plane(db)
