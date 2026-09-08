@@ -127,16 +127,19 @@ class AlertEvaluationService:
             if unsupported:
                 raise ValueError(f"Live detection is not ready for: {', '.join(unsupported)}")
 
-            live_candle_count = min(max(pattern_length * 2, 60), 5000)
+            # Named-pattern alerts are intentionally scoped to the exact live chart
+            # window selected by pattern_length. Historical candles are never used by
+            # the named detector as evidence for a live named-pattern trigger.
+            live_candle_count = pattern_length
             live_rows = rows[-live_candle_count:]
             live_matches = detect_live_patterns(live_rows, requested, live_candle_count)
             matched_names = {item["name"] for item in live_matches}
             named_results = []
             for name in requested:
                 match = next((item for item in live_matches if item["name"] == name), None)
-                named_results.append({"name": name, "matched": match is not None, "start_time": match["start_time"] if match else None, "end_time": match["end_time"] if match else None, "detected_at": match["detected_at"] if match else None, "candle_count": match["candle_count"] if match else 0, "reason": match["reason"] if match else f"{name} was not found in the latest {len(live_rows)} completed candles"})
+                named_results.append({"name": name, "matched": match is not None, "start_time": match["start_time"] if match else None, "end_time": match["end_time"] if match else None, "detected_at": match["detected_at"] if match else None, "candle_count": match["candle_count"] if match else 0, "reason": match["reason"] if match else f"{name} was not found in the selected {len(live_rows)} completed chart candles"})
             matched_details = [f"{item['name']} at {item['detected_at'].isoformat()} UTC" for item in live_matches]
-            source_results.append({"source": "named", "matched": any(name in matched_names for name in requested) if match_mode == "any" else bool(requested) and all(name in matched_names for name in requested), "matches": named_results, "chart_scope": "live", "scanned_candles": len(live_rows), "chart_start": live_rows[0].timestamp, "chart_end": live_rows[-1].timestamp, "reason": ("LIVE CHART MATCH — " + "; ".join(matched_details)) if live_matches else f"No selected named pattern found in the latest {len(live_rows)} completed candles of the live chart"})
+            source_results.append({"source": "named", "matched": any(name in matched_names for name in requested) if match_mode == "any" else bool(requested) and all(name in matched_names for name in requested), "matches": named_results, "chart_scope": "live", "scanned_candles": len(live_rows), "chart_start": live_rows[0].timestamp, "chart_end": live_rows[-1].timestamp, "reason": ("LIVE CHART MATCH — " + "; ".join(matched_details)) if live_matches else f"No selected named pattern found in the selected {len(live_rows)} completed candles of the live chart"})
 
         triggered = any(item["matched"] for item in source_results) if match_mode == "any" else bool(source_results) and all(item["matched"] for item in source_results)
         return {"symbol": symbol, "timeframe": timeframe, "pattern_length": pattern_length, "evaluated_at": now, "triggered": triggered, "match_mode": match_mode, "algorithm_version": scorer.version, "feature_version": scorer.feature_version, "current_pattern": {"start_time": current.start_time, "end_time": current.end_time}, "sources": source_results}
