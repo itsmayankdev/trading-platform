@@ -19,16 +19,14 @@ export default function UserManagementWorkspaceGate(){
     const detect=()=>{
       const buttons=Array.from(document.querySelectorAll("main.min-h-screen aside button"));
       const usersButton=buttons.find(isUsersButton);
-      const active=Boolean(usersButton && (usersButton.className.includes("bg-amber-300/[0.08]") || usersButton.className.includes("text-white")));
-      setShow(active);
+      setShow(Boolean(usersButton && usersButton.className.includes("bg-amber-300/[0.08]")));
     };
 
     const handleClick=(event:MouseEvent)=>{
       const target=event.target as Element|null;
       const button=target?.closest("main.min-h-screen aside button");
       if(!button)return;
-      if(isUsersButton(button)) setShow(true);
-      else setShow(false);
+      setShow(isUsersButton(button));
     };
 
     detect();
