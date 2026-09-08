@@ -11,44 +11,13 @@ from backend.app.patterns.live import READY_LIVE_PATTERNS, detect_live_patterns
 from pattern_engine.algorithms.v1 import SimilarityV1
 from pattern_engine.window import CandlePoint, PatternWindow
 
-
-_TIMEFRAME_SECONDS = {
-    "1m": 60,
-    "3m": 180,
-    "5m": 300,
-    "15m": 900,
-    "30m": 1800,
-    "1h": 3600,
-    "2h": 7200,
-    "4h": 14400,
-    "6h": 21600,
-    "8h": 28800,
-    "12h": 43200,
-    "1d": 86400,
-}
+_TIMEFRAME_SECONDS = {"1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800, "1h": 3600, "2h": 7200, "4h": 14400, "6h": 21600, "8h": 28800, "12h": 43200, "1d": 86400}
 
 
 class AlertEvaluationService:
     """Evaluate alerts against current market data and optional historical sources."""
 
-    def evaluate(
-        self,
-        db: Session,
-        symbol: str,
-        timeframe: str,
-        pattern_length: int,
-        minimum_similarity: float,
-        minimum_agreement: float,
-        use_historical_filters: bool,
-        favorite_windows: list[dict[str, str]],
-        historical_window: dict[str, str] | None = None,
-        current_enabled: bool = True,
-        favorites_enabled: bool = False,
-        historical_enabled: bool = False,
-        named_enabled: bool = False,
-        named_patterns: list[str] | None = None,
-        match_mode: str = "any",
-    ) -> dict:
+    def evaluate(self, db: Session, symbol: str, timeframe: str, pattern_length: int, minimum_similarity: float, minimum_agreement: float, use_historical_filters: bool, favorite_windows: list[dict[str, str]], historical_window: dict[str, str] | None = None, current_enabled: bool = True, favorites_enabled: bool = False, historical_enabled: bool = False, named_enabled: bool = False, named_patterns: list[str] | None = None, match_mode: str = "any") -> dict:
         if not 5 <= pattern_length <= 500:
             raise ValueError("Pattern length must be between 5 and 500")
         if not 0 <= minimum_similarity <= 100:
@@ -61,18 +30,10 @@ class AlertEvaluationService:
         instrument = db.execute(select(Instrument).where(Instrument.symbol == symbol).limit(1)).scalar_one_or_none()
         if instrument is None:
             raise ValueError(f"Instrument not found: {symbol}")
-
-        rows = list(
-            db.execute(
-                select(Candle.timestamp, Candle.open, Candle.high, Candle.low, Candle.close, Candle.volume)
-                .where(Candle.instrument_id == instrument.id, Candle.timeframe == timeframe)
-                .order_by(Candle.timestamp.asc())
-            ).all()
-        )
+        rows = list(db.execute(select(Candle.timestamp, Candle.open, Candle.high, Candle.low, Candle.close, Candle.volume).where(Candle.instrument_id == instrument.id, Candle.timeframe == timeframe).order_by(Candle.timestamp.asc())).all())
         if len(rows) < pattern_length + 1:
             raise ValueError("Not enough candles to evaluate alert")
 
-        # Never evaluate a still-forming candle. This keeps live alerts deterministic.
         interval_seconds = _TIMEFRAME_SECONDS.get(timeframe)
         now = datetime.now(timezone.utc)
         if interval_seconds:
@@ -83,17 +44,8 @@ class AlertEvaluationService:
         timestamp_to_index = {row.timestamp: index for index, row in enumerate(rows)}
 
         def make_window(window_rows: list) -> PatternWindow:
-            candles = tuple(
-                CandlePoint(timestamp=row.timestamp, open=row.open, high=row.high, low=row.low, close=row.close, volume=row.volume)
-                for row in window_rows
-            )
-            return PatternWindow(
-                symbol=symbol,
-                timeframe=timeframe,
-                start_time=candles[0].timestamp,
-                end_time=candles[-1].timestamp,
-                candles=candles,
-            )
+            candles = tuple(CandlePoint(timestamp=row.timestamp, open=row.open, high=row.high, low=row.low, close=row.close, volume=row.volume) for row in window_rows)
+            return PatternWindow(symbol=symbol, timeframe=timeframe, start_time=candles[0].timestamp, end_time=candles[-1].timestamp, candles=candles)
 
         current = make_window(rows[-pattern_length:])
         scorer = SimilarityV1()
@@ -127,19 +79,8 @@ class AlertEvaluationService:
             best_similarity = candidates[0][0] if candidates else 0.0
             best_index = candidates[0][1] if candidates else None
             agreement_value, agreement_sample = directional_agreement([index for _, index in candidates])
-            similarity_pass = best_similarity >= minimum_similarity
-            agreement_pass = agreement_value is not None and agreement_value >= minimum_agreement
-            filters_pass = similarity_pass and (not use_historical_filters or agreement_pass)
-            source_results.append({
-                "source": "current",
-                "matched": filters_pass,
-                "similarity": round(best_similarity, 4),
-                "direction_agreement": round(agreement_value, 4) if agreement_value is not None else None,
-                "agreement_sample": agreement_sample,
-                "match_start": rows[best_index].timestamp if best_index is not None else None,
-                "match_end": rows[best_index + pattern_length - 1].timestamp if best_index is not None else None,
-                "reason": "closest historical analog and its top-match direction agreement passed" if filters_pass else "closest historical analog did not pass the configured historical filters",
-            })
+            filters_pass = best_similarity >= minimum_similarity and (not use_historical_filters or (agreement_value is not None and agreement_value >= minimum_agreement))
+            source_results.append({"source": "current", "matched": filters_pass, "similarity": round(best_similarity, 4), "direction_agreement": round(agreement_value, 4) if agreement_value is not None else None, "agreement_sample": agreement_sample, "match_start": rows[best_index].timestamp if best_index is not None else None, "match_end": rows[best_index + pattern_length - 1].timestamp if best_index is not None else None, "reason": "closest historical analog and its top-match direction agreement passed" if filters_pass else "closest historical analog did not pass the configured historical filters"})
 
         if favorites_enabled:
             favorite_results = []
@@ -186,8 +127,6 @@ class AlertEvaluationService:
             if unsupported:
                 raise ValueError(f"Live detection is not ready for: {', '.join(unsupported)}")
 
-            # IMPORTANT: named patterns use only the same recent completed candles shown by
-            # the live MarketChart. They never search the historical similarity database.
             live_candle_count = min(max(pattern_length * 2, 60), 5000)
             live_rows = rows[-live_candle_count:]
             live_matches = detect_live_patterns(live_rows, requested, live_candle_count)
@@ -195,36 +134,9 @@ class AlertEvaluationService:
             named_results = []
             for name in requested:
                 match = next((item for item in live_matches if item["name"] == name), None)
-                named_results.append({
-                    "name": name,
-                    "matched": match is not None,
-                    "start_time": match["start_time"] if match else None,
-                    "end_time": match["end_time"] if match else None,
-                    "detected_at": match["detected_at"] if match else None,
-                    "candle_count": match["candle_count"] if match else 0,
-                    "reason": match["reason"] if match else f"{name} was not found in the latest {len(live_rows)} completed candles",
-                })
-            source_results.append({
-                "source": "named",
-                "matched": any(name in matched_names for name in requested) if match_mode == "any" else bool(requested) and all(name in matched_names for name in requested),
-                "matches": named_results,
-                "chart_scope": "live",
-                "scanned_candles": len(live_rows),
-                "chart_start": live_rows[0].timestamp,
-                "chart_end": live_rows[-1].timestamp,
-                "reason": "named patterns were evaluated only on the latest completed candles in the selected live chart",
-            })
+                named_results.append({"name": name, "matched": match is not None, "start_time": match["start_time"] if match else None, "end_time": match["end_time"] if match else None, "detected_at": match["detected_at"] if match else None, "candle_count": match["candle_count"] if match else 0, "reason": match["reason"] if match else f"{name} was not found in the latest {len(live_rows)} completed candles"})
+            matched_details = [f"{item['name']} at {item['detected_at'].isoformat()} UTC" for item in live_matches]
+            source_results.append({"source": "named", "matched": any(name in matched_names for name in requested) if match_mode == "any" else bool(requested) and all(name in matched_names for name in requested), "matches": named_results, "chart_scope": "live", "scanned_candles": len(live_rows), "chart_start": live_rows[0].timestamp, "chart_end": live_rows[-1].timestamp, "reason": ("LIVE CHART MATCH — " + "; ".join(matched_details)) if live_matches else f"No selected named pattern found in the latest {len(live_rows)} completed candles of the live chart"})
 
         triggered = any(item["matched"] for item in source_results) if match_mode == "any" else bool(source_results) and all(item["matched"] for item in source_results)
-        return {
-            "symbol": symbol,
-            "timeframe": timeframe,
-            "pattern_length": pattern_length,
-            "evaluated_at": current.end_time,
-            "triggered": triggered,
-            "match_mode": match_mode,
-            "algorithm_version": scorer.version,
-            "feature_version": scorer.feature_version,
-            "current_pattern": {"start_time": current.start_time, "end_time": current.end_time},
-            "sources": source_results,
-        }
+        return {"symbol": symbol, "timeframe": timeframe, "pattern_length": pattern_length, "evaluated_at": now, "triggered": triggered, "match_mode": match_mode, "algorithm_version": scorer.version, "feature_version": scorer.feature_version, "current_pattern": {"start_time": current.start_time, "end_time": current.end_time}, "sources": source_results}
