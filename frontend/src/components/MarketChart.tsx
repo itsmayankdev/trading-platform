@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Maximize2, Minimize2, RotateCcw } from "lucide-react";
-import { CandlestickSeries, ColorType, createChart, type CandlestickData, type IChartApi, type Time } from "lightweight-charts";
+import { CandlestickSeries, ColorType, createChart, type CandlestickData, type IChartApi, type MouseEventParams, type Time } from "lightweight-charts";
 
 type Candle = { time: number; open: number; high: number; low: number; close: number; volume: number };
 type MarketChartProps = { symbol: string; timeframe: string; patternLength: number; highlightLocked: boolean };
@@ -18,10 +18,26 @@ function positionPatternBox(chart: IChartApi, box: HTMLDivElement, candles: Cand
   box.style.width = `${Math.max(14, Math.abs(right - left) + 8)}px`;
 }
 
+function formatNumber(value: number) {
+  return new Intl.NumberFormat("en-US", { maximumFractionDigits: 4 }).format(value);
+}
+
+function formatVolume(value: number) {
+  if (value >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(2)}B`;
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(2)}M`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(2)}K`;
+  return formatNumber(value);
+}
+
+function formatCandleTime(value: number) {
+  return new Intl.DateTimeFormat("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "UTC" }).format(new Date(value * 1000));
+}
+
 export default function MarketChart({ symbol, timeframe, patternLength, highlightLocked }: MarketChartProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const patternBoxRef = useRef<HTMLDivElement | null>(null);
+  const tooltipRef = useRef<HTMLDivElement | null>(null);
   const candlesRef = useRef<Candle[]>([]);
   const [fullscreen, setFullscreen] = useState(false);
 
@@ -67,6 +83,30 @@ export default function MarketChart({ symbol, timeframe, patternLength, highligh
     });
     resizeObserver.observe(container);
 
+    function handleCrosshairMove(param: MouseEventParams<Time>) {
+      const tooltip = tooltipRef.current;
+      if (!tooltip || param.point == null || param.time == null) return;
+      const candleTime = Number(param.time);
+      const candle = candlesRef.current.find((item) => item.time === candleTime);
+      if (!candle) {
+        tooltip.style.opacity = "0";
+        return;
+      }
+      const change = candle.open !== 0 ? ((candle.close - candle.open) / candle.open) * 100 : 0;
+      tooltip.innerHTML = `<div class="mb-1 font-mono text-[9px] text-white/40">${formatCandleTime(candle.time)} UTC</div><div class="grid grid-cols-2 gap-x-3 gap-y-1 font-mono text-[10px]"><span class="text-white/35">O <b class="font-medium text-white/75">${formatNumber(candle.open)}</b></span><span class="text-white/35">H <b class="font-medium text-white/75">${formatNumber(candle.high)}</b></span><span class="text-white/35">L <b class="font-medium text-white/75">${formatNumber(candle.low)}</b></span><span class="text-white/35">C <b class="font-medium ${change >= 0 ? "text-emerald-300" : "text-rose-300"}">${formatNumber(candle.close)}</b></span><span class="col-span-2 text-white/35">VOL <b class="font-medium text-white/70">${formatVolume(candle.volume)}</b></span></div>`;
+      const x = Math.min(Math.max(param.point.x + 12, 8), container.clientWidth - 142);
+      const y = Math.min(Math.max(param.point.y - 18, 8), container.clientHeight - 82);
+      tooltip.style.left = `${x}px`;
+      tooltip.style.top = `${y}px`;
+      tooltip.style.opacity = "1";
+    }
+
+    function handleCrosshairLeave() {
+      if (tooltipRef.current) tooltipRef.current.style.opacity = "0";
+    }
+
+    chart.subscribeCrosshairMove(handleCrosshairMove);
+
     async function loadCandles() {
       try {
         const limit = Math.min(Math.max(patternLength * 2, 60), 5000);
@@ -90,6 +130,7 @@ export default function MarketChart({ symbol, timeframe, patternLength, highligh
     document.addEventListener("fullscreenchange", onFullscreenChange);
 
     return () => {
+      chart.unsubscribeCrosshairMove(handleCrosshairMove);
       document.removeEventListener("fullscreenchange", onFullscreenChange);
       resizeObserver.disconnect();
       chart.remove();
@@ -108,6 +149,7 @@ export default function MarketChart({ symbol, timeframe, patternLength, highligh
 
   return (
     <div ref={containerRef} className={`group relative w-full ${fullscreen ? "h-screen bg-[#0d1219]" : "h-[380px]"}`}>
+      <div ref={tooltipRef} className="pointer-events-none absolute z-50 w-[134px] rounded-md border border-white/10 bg-[#090d13]/95 px-2 py-1.5 opacity-0 shadow-2xl backdrop-blur-sm transition-opacity" />
       <div className="pointer-events-none absolute right-2 top-2 z-30 flex gap-1 opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
         <button type="button" aria-label="Fit chart to visible candles" title="Fit chart" onClick={fitChart} className="pointer-events-auto flex h-7 items-center gap-1 rounded border border-white/10 bg-[#090d13]/90 px-2 text-[8px] font-semibold uppercase tracking-[0.1em] text-white/60 shadow-lg backdrop-blur hover:text-white"><RotateCcw size={11} /> Fit</button>
         <button type="button" aria-label={fullscreen ? "Exit fullscreen" : "Open chart fullscreen"} title={fullscreen ? "Exit fullscreen" : "Fullscreen"} onClick={() => void toggleFullscreen()} className="pointer-events-auto flex h-7 items-center justify-center rounded border border-white/10 bg-[#090d13]/90 px-2 text-white/60 shadow-lg backdrop-blur hover:text-white">{fullscreen ? <Minimize2 size={12} /> : <Maximize2 size={12} />}</button>
