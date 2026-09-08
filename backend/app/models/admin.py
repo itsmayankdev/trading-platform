@@ -25,6 +25,7 @@ class AdminUser(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     email: Mapped[str] = mapped_column(String(320), unique=True, index=True)
     display_name: Mapped[str] = mapped_column(String(160), default="")
+    password_hash: Mapped[str] = mapped_column(String(512), default="")
     status: Mapped[str] = mapped_column(String(32), default="active", index=True)
     plan_id: Mapped[int | None] = mapped_column(ForeignKey("admin_plans.id", ondelete="SET NULL"), nullable=True)
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
