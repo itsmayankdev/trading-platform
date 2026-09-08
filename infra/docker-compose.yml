@@ -45,9 +45,9 @@ services:
       REDIS_URL: redis://redis:6379/0
       BINANCE_API_KEY: ""
       BINANCE_API_SECRET: ""
-      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
-      ADMIN_SESSION_SECRET: ${ADMIN_SESSION_SECRET:-}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin-demo@marketmemory.local}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-DemoAdmin@2026}
+      ADMIN_SESSION_SECRET: ${ADMIN_SESSION_SECRET:-demo-admin-session-secret-change-before-production}
       PATTERN_SEARCH_PROFILE: ${PATTERN_SEARCH_PROFILE:-false}
     depends_on:
       postgres:
