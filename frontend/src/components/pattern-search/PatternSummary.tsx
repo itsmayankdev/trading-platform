@@ -1,13 +1,8 @@
 import { ArrowDownRight, ArrowUpRight, BarChart3, Clock3, Database, Gauge } from "lucide-react";
 import type { SearchResponse } from "./types";
 
-function pct(value: number) {
-  return `${value >= 0 ? "+" : ""}${(value * 100).toFixed(2)}%`;
-}
-
-function formatDate(value: string) {
-  return new Intl.DateTimeFormat("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "UTC" }).format(new Date(value));
-}
+function pct(value: number) { return `${value >= 0 ? "+" : ""}${(value * 100).toFixed(2)}%`; }
+function formatDate(value: string) { return new Intl.DateTimeFormat("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "UTC" }).format(new Date(value)); }
 
 export default function PatternSummary({ data }: { data: SearchResponse }) {
   const topMatch = data.matches[0];
@@ -37,48 +32,31 @@ export default function PatternSummary({ data }: { data: SearchResponse }) {
 
   return (
     <section className="panel overflow-hidden">
-      <div className="grid grid-cols-2 divide-x divide-y divide-white/7 lg:grid-cols-4 lg:divide-y-0">
+      <div className="grid grid-cols-2 divide-x divide-white/7 lg:grid-cols-4 lg:divide-y-0">
         {items.map(({ icon: Icon, label, value, detail }) => (
-          <div key={label} className="min-w-0 px-4 py-3">
-            <div className="flex items-center gap-1.5 text-[9px] font-semibold uppercase tracking-[0.14em] text-white/30"><Icon size={11} /> {label}</div>
-            <div className="mt-1 font-mono text-sm font-semibold tabular-nums text-white/85">{value}</div>
-            <div className="mt-0.5 truncate text-[9px] text-white/25">{detail}</div>
+          <div key={label} className="min-w-0 px-3 py-2.5 lg:px-4">
+            <div className="flex items-center gap-1.5 text-[8px] font-semibold uppercase tracking-[0.14em] text-white/30"><Icon size={10} /> {label}</div>
+            <div className="mt-0.5 font-mono text-sm font-semibold tabular-nums text-white/85">{value}</div>
+            <div className="truncate text-[8px] text-white/25">{detail}</div>
           </div>
         ))}
       </div>
-
-      <div className="border-t border-white/7 px-4 py-2.5">
-        <div className="mb-2 flex items-center justify-between gap-3">
-          <div>
-            <div className="text-[9px] font-semibold uppercase tracking-[0.14em] text-white/35">Historical direction after match</div>
-            <div className="mt-0.5 text-[9px] text-white/20">Retrieved matches grouped by the direction of the forward close at each horizon.</div>
-          </div>
+      <div className="border-t border-white/7 px-3 py-2 lg:px-4">
+        <div className="mb-1.5 flex items-center justify-between gap-3">
+          <div className="text-[8px] font-semibold uppercase tracking-[0.14em] text-white/35">Historical direction after match</div>
           <div className="hidden font-mono text-[8px] uppercase tracking-[0.1em] text-white/20 sm:block">Descriptive · not a forecast</div>
         </div>
         <div className="grid grid-cols-2 gap-1.5 xl:grid-cols-4">
           {directionRows.map(({ horizon, total, up, down, flat, dominant, dominantPct, consistency }) => (
-            <div key={horizon} className="rounded-md border border-white/7 bg-white/[0.015] px-3 py-2">
-              <div className="flex items-center justify-between">
-                <span className="text-[9px] font-semibold uppercase tracking-[0.12em] text-white/30">+{horizon} candles</span>
-                <span className="font-mono text-[8px] text-white/20">N {total}</span>
-              </div>
-              <div className="mt-1.5 flex items-center gap-3 font-mono text-[10px] tabular-nums">
-                <span className="flex items-center gap-1 text-emerald-400"><ArrowUpRight size={11} /> {up}</span>
-                <span className="flex items-center gap-1 text-rose-400"><ArrowDownRight size={11} /> {down}</span>
-                {flat > 0 && <span className="text-white/35">• {flat}</span>}
-              </div>
-              <div className="mt-1.5 flex items-center justify-between border-t border-white/6 pt-1.5 text-[8px] uppercase tracking-[0.1em]">
-                <span className="text-white/20">Dominant {dominant}</span>
-                <span className={consistency === "Strong" ? "text-white/55" : consistency === "Lean" ? "text-white/40" : "text-white/25"}>{consistency} · {dominantPct.toFixed(0)}%</span>
-              </div>
+            <div key={horizon} className="rounded border border-white/7 bg-white/[0.015] px-2.5 py-1.5">
+              <div className="flex items-center justify-between"><span className="text-[8px] font-semibold uppercase tracking-[0.1em] text-white/30">+{horizon}</span><span className="font-mono text-[8px] text-white/20">N {total}</span></div>
+              <div className="mt-1 flex items-center gap-3 font-mono text-[10px] tabular-nums"><span className="flex items-center gap-1 text-emerald-400"><ArrowUpRight size={10} /> {up}</span><span className="flex items-center gap-1 text-rose-400"><ArrowDownRight size={10} /> {down}</span>{flat > 0 && <span className="text-white/30">• {flat}</span>}</div>
+              <div className="mt-1 flex items-center justify-between border-t border-white/6 pt-1 text-[7px] uppercase tracking-[0.08em]"><span className="text-white/20">{dominant}</span><span className={consistency === "Strong" ? "text-white/55" : consistency === "Lean" ? "text-white/40" : "text-white/25"}>{consistency} · {dominantPct.toFixed(0)}%</span></div>
             </div>
           ))}
         </div>
       </div>
-
-      {topMatch && bestStatistic && <div className="border-t border-white/7 px-4 py-2 text-[9px] text-white/25">
-        Strongest historical analogue currently ranks at <span className="font-mono text-white/45">{topMatch.similarity_score.toFixed(2)}%</span> similarity. The displayed evidence is descriptive historical data; it is not a probability or forecast. At +{bestStatistic.horizon_candles} candles, the sample shows a median return of <span className={bestStatistic.median_return >= 0 ? "text-emerald-400/70" : "text-rose-400/70"}>{pct(bestStatistic.median_return)}</span>.
-      </div>}
+      {topMatch && bestStatistic && <div className="border-t border-white/7 px-3 py-1.5 text-[8px] text-white/22 lg:px-4">Top analogue <span className="font-mono text-white/45">{topMatch.similarity_score.toFixed(2)}%</span> · +{bestStatistic.horizon_candles} median <span className={bestStatistic.median_return >= 0 ? "text-emerald-400/70" : "text-rose-400/70"}>{pct(bestStatistic.median_return)}</span> · historical evidence only.</div>}
     </section>
   );
 }
