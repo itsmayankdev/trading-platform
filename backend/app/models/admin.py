@@ -57,7 +57,7 @@ class AdminPermission(Base):
     module: Mapped[str] = mapped_column(String(80), index=True)
     operation: Mapped[str] = mapped_column(String(80))
     description: Mapped[str] = mapped_column(String(300), default="")
-    roles: Mapped[list[AdminRole]] = relationship(secondary=role_permissions, back_populates="roles")
+    roles: Mapped[list[AdminRole]] = relationship(secondary=role_permissions, back_populates="permissions")
 
 class AdminUserModule(Base):
     __tablename__ = "admin_user_modules"
