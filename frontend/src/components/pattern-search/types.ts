@@ -22,6 +22,12 @@ export type Statistic = {
   mean_mae: number;
 };
 
+export type ForwardPath = {
+  match_index: number;
+  similarity_score: number;
+  values: number[];
+};
+
 export type SearchResponse = {
   symbol: string;
   timeframe: string;
@@ -34,4 +40,5 @@ export type SearchResponse = {
   };
   matches: Match[];
   statistics: Statistic[];
+  forward_paths: ForwardPath[];
 };
