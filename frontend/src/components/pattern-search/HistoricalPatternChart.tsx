@@ -122,7 +122,7 @@ function HistoricalChartCanvas({ symbol, timeframe, patternLength, match, highli
   }, [highlightLocked, patternLength]);
 
   return (
-    <div ref={containerRef} className={`group relative h-[380px] w-full ${fullscreen ? "bg-[#0d1219]" : ""}`}>
+    <div ref={containerRef} className={`group relative w-full ${fullscreen ? "h-screen bg-[#0d1219]" : "h-[380px]"}`}>
       <div className="pointer-events-none absolute right-2 top-2 z-30 flex gap-1 opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
         <button type="button" aria-label="Fit historical chart to visible candles" title="Fit chart" onClick={fitChart} className="pointer-events-auto flex h-7 items-center gap-1 rounded border border-white/10 bg-[#090d13]/90 px-2 text-[8px] font-semibold uppercase tracking-[0.1em] text-white/60 shadow-lg backdrop-blur hover:text-white"><RotateCcw size={11} /> Fit</button>
         <button type="button" aria-label={fullscreen ? "Exit fullscreen" : "Open chart fullscreen"} title={fullscreen ? "Exit fullscreen" : "Fullscreen"} onClick={() => void toggleFullscreen()} className="pointer-events-auto flex h-7 items-center justify-center rounded border border-white/10 bg-[#090d13]/90 px-2 text-white/60 shadow-lg backdrop-blur hover:text-white">{fullscreen ? <Minimize2 size={12} /> : <Maximize2 size={12} />}</button>
@@ -153,6 +153,6 @@ export default function HistoricalPatternChart({ symbol, timeframe, patternLengt
     </div>
     <HistoricalChartCanvas key={match.start_time} symbol={symbol} timeframe={timeframe} patternLength={patternLength} match={match} highlightLocked={highlightLocked} />
     <div className="border-t border-white/8 px-3 py-2 text-[9px] uppercase tracking-[0.1em] text-white/25">Matched window · next 45 candles show what happened afterward</div>
-    <div className="grid grid-cols-2 border-t border-white/8 sm:grid-cols-4">{[5, 15, 30, 45].map((horizon) => { const outcome = match.outcomes.find((item) => item.horizon_candles === horizon); return <div key={horizon} className="border-r border-white/6 px-3 py-2.5 last:border-r-0"><div className="text-[9px] uppercase tracking-[0.14em] text-white/25">+{horizon} candles</div><div className={`mt-0.5 font-mono text-sm ${outcome && outcome.forward_return >= 0 ? "text-emerald-400" : "text-rose-400"}`}>{outcome ? `${outcome.forward_return >= 0 ? "+" : ""}${(outcome.forward_return * 100).toFixed(2)}%` : "—"}</div></div>; })}</div>
+    <div className="grid grid-cols-2 border-t border-white/8 sm:grid-cols-4">{[5, 15, 30, 60].map((horizon) => { const outcome = match.outcomes.find((item) => item.horizon_candles === horizon); return <div key={horizon} className="border-r border-white/6 px-3 py-2.5 last:border-r-0"><div className="text-[9px] uppercase tracking-[0.14em] text-white/25">+{horizon} candles</div><div className={`mt-0.5 font-mono text-sm ${outcome && outcome.forward_return >= 0 ? "text-emerald-400" : "text-rose-400"}`}>{outcome ? `${outcome.forward_return >= 0 ? "+" : ""}${(outcome.forward_return * 100).toFixed(2)}%` : "—"}</div></div>; })}</div>
   </section>;
 }
