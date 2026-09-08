@@ -4,6 +4,7 @@ import os
 import time
 from collections import OrderedDict
 from threading import Lock
+from statistics import median
 
 from sqlalchemy import desc, select
 
@@ -15,6 +16,7 @@ from pattern_engine.window import CandlePoint, PatternWindow
 from pattern_engine.ranking import PatternRanker
 from pattern_engine.outcomes import calculate_outcomes
 from pattern_engine.statistics import calculate_statistics
+from pattern_engine.diagnostics import build_match_diagnostics
 
 
 _CACHE_MAX_ENTRIES = 8
@@ -139,6 +141,20 @@ class PatternSearchService:
 
         started = time.perf_counter()
         statistics = calculate_statistics(all_outcomes)
+        match_starts = [match.start_time for match in matches]
+        match_scores = [match.similarity_score for match in matches]
+        intervals = [
+            (timestamps[index + 1] - timestamps[index]).total_seconds()
+            for index in range(min(len(timestamps) - 1, 1000))
+            if (timestamps[index + 1] - timestamps[index]).total_seconds() > 0
+        ]
+        candle_interval_seconds = median(intervals) if intervals else 60.0
+        diagnostics = build_match_diagnostics(
+            starts=match_starts,
+            scores=match_scores,
+            pattern_length=pattern_length,
+            candle_interval_seconds=candle_interval_seconds,
+        )
         response = {
             "symbol": symbol,
             "timeframe": timeframe,
@@ -152,6 +168,7 @@ class PatternSearchService:
                 for stat in statistics
             ],
             "forward_paths": forward_paths,
+            "quality_diagnostics": diagnostics,
         }
         mark("response_build", started)
 
