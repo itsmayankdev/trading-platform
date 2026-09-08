@@ -8,12 +8,18 @@ from sqlalchemy import inspect, text
 
 def init_db() -> None:
     Base.metadata.create_all(bind=engine)
-    # Lightweight forward migration for existing development databases.
+    # Lightweight forward migrations for existing development databases.
     inspector = inspect(engine)
     columns = {c["name"] for c in inspector.get_columns("admin_users")}
-    if "password_hash" not in columns:
-        with engine.begin() as conn:
+    with engine.begin() as conn:
+        if "password_hash" not in columns:
             conn.execute(text("ALTER TABLE admin_users ADD COLUMN password_hash VARCHAR(512) NOT NULL DEFAULT ''"))
+        if "first_name" not in columns:
+            conn.execute(text("ALTER TABLE admin_users ADD COLUMN first_name VARCHAR(80) NOT NULL DEFAULT ''"))
+        if "last_name" not in columns:
+            conn.execute(text("ALTER TABLE admin_users ADD COLUMN last_name VARCHAR(80) NOT NULL DEFAULT ''"))
+        if "first_name" not in columns or "last_name" not in columns:
+            conn.execute(text("UPDATE admin_users SET first_name = split_part(trim(display_name), ' ', 1), last_name = CASE WHEN position(' ' in trim(display_name)) > 0 THEN trim(substr(trim(display_name), position(' ' in trim(display_name)) + 1)) ELSE '' END WHERE (first_name = '' OR last_name = '') AND display_name <> ''"))
     db = SessionLocal()
     try:
         seed_control_plane(db)
