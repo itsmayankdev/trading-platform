@@ -6,7 +6,7 @@ import { CandlestickSeries, ColorType, createChart, type CandlestickData, type I
 import type { Match } from "./types";
 
 type Candle = { time: number; open: number; high: number; low: number; close: number };
-type Props = { symbol: string; timeframe: string; patternLength: number; matches: Match[]; highlightLocked: boolean };
+type Props = { symbol: string; timeframe: string; patternLength: number; matches: Match[]; highlightLocked: boolean; dashboardFullscreen: boolean; onFullscreenToggle: () => void };
 
 function formatDate(value: string) {
   return new Intl.DateTimeFormat("en-GB", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "UTC" }).format(new Date(value));
@@ -35,31 +35,25 @@ function formatCandleTime(value: number) {
   return new Intl.DateTimeFormat("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "UTC" }).format(new Date(value * 1000));
 }
 
-function HistoricalChartCanvas({ symbol, timeframe, patternLength, match, highlightLocked }: { symbol: string; timeframe: string; patternLength: number; match: Match; highlightLocked: boolean }) {
+function HistoricalChartCanvas({ symbol, timeframe, patternLength, match, highlightLocked, dashboardFullscreen, onFullscreenToggle }: { symbol: string; timeframe: string; patternLength: number; match: Match; highlightLocked: boolean; dashboardFullscreen: boolean; onFullscreenToggle: () => void }) {
   const [candles, setCandles] = useState<Candle[]>([]);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
-  const [fullscreen, setFullscreen] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const patternBoxRef = useRef<HTMLDivElement | null>(null);
   const tooltipRef = useRef<HTMLDivElement | null>(null);
   const candlesRef = useRef<Candle[]>([]);
 
+  function hideTooltip() {
+    if (tooltipRef.current) tooltipRef.current.style.opacity = "0";
+  }
+
   function fitChart() {
     chartRef.current?.timeScale().fitContent();
     if (chartRef.current && patternBoxRef.current) {
       positionPatternBox(chartRef.current, patternBoxRef.current, candlesRef.current, patternLength);
     }
-  }
-
-  async function toggleFullscreen() {
-    if (!containerRef.current) return;
-    try {
-      if (document.fullscreenElement === containerRef.current) await document.exitFullscreen();
-      else await containerRef.current.requestFullscreen();
-    } catch {
-      // Fullscreen can be unavailable in embedded previews or restricted browsers.
-    }
+    hideTooltip();
   }
 
   useEffect(() => {
@@ -108,18 +102,21 @@ function HistoricalChartCanvas({ symbol, timeframe, patternLength, match, highli
 
     function handleCrosshairMove(param: MouseEventParams<Time>) {
       const tooltip = tooltipRef.current;
-      if (!tooltip || param.point == null || param.time == null) return;
+      if (!tooltip || param.point == null || param.time == null) {
+        hideTooltip();
+        return;
+      }
       const candle = candlesRef.current.find((item) => item.time === Number(param.time));
       if (!candle) {
-        tooltip.style.opacity = "0";
+        hideTooltip();
         return;
       }
       const change = candle.open !== 0 ? ((candle.close - candle.open) / candle.open) * 100 : 0;
       const index = candlesRef.current.indexOf(candle);
       const matched = index >= 0 && index < patternLength;
       tooltip.innerHTML = `<div class="mb-1 font-mono text-[9px] text-white/40">${formatCandleTime(candle.time)} UTC</div><div class="grid grid-cols-2 gap-x-3 gap-y-1 font-mono text-[10px]"><span class="text-white/35">O <b class="font-medium text-white/75">${formatNumber(candle.open)}</b></span><span class="text-white/35">H <b class="font-medium text-white/75">${formatNumber(candle.high)}</b></span><span class="text-white/35">L <b class="font-medium text-white/75">${formatNumber(candle.low)}</b></span><span class="text-white/35">C <b class="font-medium ${change >= 0 ? "text-emerald-300" : "text-rose-300"}">${formatNumber(candle.close)}</b></span>${matched ? '<span class="col-span-2 mt-0.5 border-t border-amber-300/10 pt-1 text-[8px] font-semibold uppercase tracking-[0.08em] text-amber-200/80">Matched pattern candle</span>' : '<span class="col-span-2 text-[8px] text-white/25">Forward path after match</span>'}</div>`;
-      const x = Math.min(Math.max(param.point.x + 12, 8), container.clientWidth - 142);
-      const y = Math.min(Math.max(param.point.y - 18, 8), container.clientHeight - 72);
+      const x = Math.min(Math.max(param.point.x + 12, 8), Math.max(8, container.clientWidth - 142));
+      const y = Math.min(Math.max(param.point.y - 18, 8), Math.max(8, container.clientHeight - 72));
       tooltip.style.left = `${x}px`;
       tooltip.style.top = `${y}px`;
       tooltip.style.opacity = "1";
@@ -133,16 +130,14 @@ function HistoricalChartCanvas({ symbol, timeframe, patternLength, match, highli
       chart.timeScale().fitContent();
       if (patternBoxRef.current) positionPatternBox(chart, patternBoxRef.current, candles, patternLength);
     }
-    const onFullscreenChange = () => setFullscreen(document.fullscreenElement === container);
-    document.addEventListener("fullscreenchange", onFullscreenChange);
     return () => {
       chart.unsubscribeCrosshairMove(handleCrosshairMove);
-      document.removeEventListener("fullscreenchange", onFullscreenChange);
       resizeObserver.disconnect();
+      hideTooltip();
       chart.remove();
       chartRef.current = null;
     };
-    // The chart is rebuilt when candle data changes, not when HLT toggles.
+    // The chart is rebuilt when candle data changes, not when HLT or dashboard fullscreen toggles.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [candles, patternLength]);
 
@@ -154,11 +149,11 @@ function HistoricalChartCanvas({ symbol, timeframe, patternLength, match, highli
   }, [highlightLocked, patternLength]);
 
   return (
-    <div ref={containerRef} className={`group relative w-full ${fullscreen ? "h-screen bg-[#0d1219]" : "h-[380px]"}`}>
+    <div ref={containerRef} onMouseLeave={hideTooltip} className={`group relative w-full ${dashboardFullscreen ? "min-h-0 flex-1" : "h-[380px]"}`}>
       <div ref={tooltipRef} className="pointer-events-none absolute z-50 w-[134px] rounded-md border border-white/10 bg-[#090d13]/95 px-2 py-1.5 opacity-0 shadow-2xl backdrop-blur-sm transition-opacity" />
       <div className="pointer-events-none absolute right-2 top-2 z-30 flex gap-1 opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
         <button type="button" aria-label="Fit historical chart to visible candles" title="Fit chart" onClick={fitChart} className="pointer-events-auto flex h-7 items-center gap-1 rounded border border-white/10 bg-[#090d13]/90 px-2 text-[8px] font-semibold uppercase tracking-[0.1em] text-white/60 shadow-lg backdrop-blur hover:text-white"><RotateCcw size={11} /> Fit</button>
-        <button type="button" aria-label={fullscreen ? "Exit fullscreen" : "Open chart fullscreen"} title={fullscreen ? "Exit fullscreen" : "Fullscreen"} onClick={() => void toggleFullscreen()} className="pointer-events-auto flex h-7 items-center justify-center rounded border border-white/10 bg-[#090d13]/90 px-2 text-white/60 shadow-lg backdrop-blur hover:text-white">{fullscreen ? <Minimize2 size={12} /> : <Maximize2 size={12} />}</button>
+        <button type="button" aria-label={dashboardFullscreen ? "Exit fullscreen" : "Open both charts fullscreen"} title={dashboardFullscreen ? "Exit fullscreen" : "Open both charts fullscreen"} onClick={onFullscreenToggle} className="pointer-events-auto flex h-7 items-center justify-center rounded border border-white/10 bg-[#090d13]/90 px-2 text-white/60 shadow-lg backdrop-blur hover:text-white">{dashboardFullscreen ? <Minimize2 size={12} /> : <Maximize2 size={12} />}</button>
       </div>
       <div className={`absolute inset-0 z-20 flex items-center justify-center bg-[#0b1017]/75 backdrop-blur-sm ${status === "loading" ? "" : "hidden"}`}><div className="flex items-center gap-2 text-xs text-white/45"><Loader2 size={15} className="animate-spin" /> Loading historical candles</div></div>
       {status === "error" && <div className="absolute left-4 top-4 z-20 rounded-md border border-red-400/15 bg-[#0b1017] px-3 py-2 text-xs text-red-300">Could not load this historical pattern.</div>}
@@ -170,21 +165,21 @@ function HistoricalChartCanvas({ symbol, timeframe, patternLength, match, highli
   );
 }
 
-export default function HistoricalPatternChart({ symbol, timeframe, patternLength, matches, highlightLocked }: Props) {
+export default function HistoricalPatternChart({ symbol, timeframe, patternLength, matches, highlightLocked, dashboardFullscreen, onFullscreenToggle }: Props) {
   const [index, setIndex] = useState(0);
   const match = matches[index];
   if (!match) return <section className="panel p-6 text-sm text-white/35">No historical matches available.</section>;
 
-  return <section className="panel overflow-hidden">
-    <div className="flex h-12 items-center justify-between border-b border-white/8 px-3.5">
+  return <section className={`panel overflow-hidden ${dashboardFullscreen ? "flex h-full min-h-0 flex-col" : ""}`}>
+    <div className="flex h-12 shrink-0 items-center justify-between border-b border-white/8 px-3.5">
       <div className="flex min-w-0 items-center gap-3">
         <div className="min-w-0"><div className="text-[9px] font-semibold uppercase tracking-[0.14em] text-white/35">Historical match</div><div className="mt-0.5 flex items-center gap-2"><h2 className="text-xs font-semibold">Match {String(index + 1).padStart(2, "0")}</h2><span className="rounded border border-white/8 bg-white/[0.025] px-1.5 py-0.5 font-mono text-[9px] text-white/45">{match.similarity_score.toFixed(2)}%</span></div></div>
         <div className="hidden items-center gap-1.5 text-[9px] text-white/25 xl:flex"><CalendarDays size={11} /> {formatDate(match.start_time)} → {formatDate(match.end_time)} UTC</div>
       </div>
       <div className="flex shrink-0 items-center gap-1.5"><button type="button" aria-label="Previous historical match" disabled={index === 0} onClick={() => setIndex((value) => Math.max(0, value - 1))} className="flex h-7 w-7 items-center justify-center rounded-md border border-white/8 bg-white/[0.02] text-white/55 transition hover:bg-white/[0.05] hover:text-white disabled:cursor-not-allowed disabled:opacity-25"><ArrowLeft size={14} /></button><div className="min-w-[52px] text-center font-mono text-[9px] text-white/35">{index + 1} / {matches.length}</div><button type="button" aria-label="Next historical match" disabled={index === matches.length - 1} onClick={() => setIndex((value) => Math.min(matches.length - 1, value + 1))} className="flex h-7 w-7 items-center justify-center rounded-md border border-white/8 bg-white/[0.02] text-white/55 transition hover:bg-white/[0.05] hover:text-white disabled:cursor-not-allowed disabled:opacity-25"><ArrowRight size={14} /></button></div>
     </div>
-    <HistoricalChartCanvas key={match.start_time} symbol={symbol} timeframe={timeframe} patternLength={patternLength} match={match} highlightLocked={highlightLocked} />
-    <div className="border-t border-white/8 px-3 py-2 text-[9px] uppercase tracking-[0.1em] text-white/25">Matched window · next 45 candles show what happened afterward</div>
-    <div className="grid grid-cols-2 border-t border-white/8 sm:grid-cols-4">{[5, 15, 30, 60].map((horizon) => { const outcome = match.outcomes.find((item) => item.horizon_candles === horizon); return <div key={horizon} className="border-r border-white/6 px-3 py-2.5 last:border-r-0"><div className="text-[9px] uppercase tracking-[0.14em] text-white/25">+{horizon} candles</div><div className={`mt-0.5 font-mono text-sm ${outcome && outcome.forward_return >= 0 ? "text-emerald-400" : "text-rose-400"}`}>{outcome ? `${outcome.forward_return >= 0 ? "+" : ""}${(outcome.forward_return * 100).toFixed(2)}%` : "—"}</div></div>; })}</div>
+    <HistoricalChartCanvas key={match.start_time} symbol={symbol} timeframe={timeframe} patternLength={patternLength} match={match} highlightLocked={highlightLocked} dashboardFullscreen={dashboardFullscreen} onFullscreenToggle={onFullscreenToggle} />
+    <div className="shrink-0 border-t border-white/8 px-3 py-2 text-[9px] uppercase tracking-[0.1em] text-white/25">Matched window · next 45 candles show what happened afterward</div>
+    <div className="grid shrink-0 grid-cols-2 border-t border-white/8 sm:grid-cols-4">{[5, 15, 30, 60].map((horizon) => { const outcome = match.outcomes.find((item) => item.horizon_candles === horizon); return <div key={horizon} className="border-r border-white/6 px-3 py-2.5 last:border-r-0"><div className="text-[9px] uppercase tracking-[0.14em] text-white/25">+{horizon} candles</div><div className={`mt-0.5 font-mono text-sm ${outcome && outcome.forward_return >= 0 ? "text-emerald-400" : "text-rose-400"}`}>{outcome ? `${outcome.forward_return >= 0 ? "+" : ""}${(outcome.forward_return * 100).toFixed(2)}%` : "—"}</div></div>; })}</div>
   </section>;
 }
