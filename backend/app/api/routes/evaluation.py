@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from statistics import median
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
@@ -74,8 +75,6 @@ def evaluation(
         raise HTTPException(status_code=400, detail="Not enough candles for evaluation")
 
     timestamps = [r.timestamp for r in rows]
-    # Require enough history for at least one non-overlapping historical window
-    # before the first checkpoint. This prevents a misleading empty first row.
     minimum_history_end = (pattern_length * 2) - 1
     start_idx = max(minimum_history_end, pattern_length - 1)
     if start_time is not None:
@@ -83,7 +82,7 @@ def evaluation(
 
     end_idx = len(rows) - max(HORIZONS) - 1
     if end_time is not None:
-        end_idx = min(end_idx, max(0, next((i for i, t in enumerate(timestamps) if t > end_time), len(rows)) - 1))
+        end_idx = min(end_idx, max(0, next((i for i, t in enumerate(timestamps) if t > end_time), len(timestamps)) - 1))
     if end_idx <= start_idx:
         raise HTTPException(status_code=400, detail="Evaluation range is too small for the selected pattern and horizon")
 
@@ -96,14 +95,12 @@ def evaluation(
 
     ranker = PatternRanker()
     evaluations = []
+    timestamp_to_index = {timestamp: i for i, timestamp in enumerate(timestamps)}
 
     for current_end in checkpoint_indices:
         current_start = current_end - pattern_length + 1
         current = _window(rows, current_start, pattern_length, symbol, timeframe)
 
-        # Strict walk-forward isolation: the retrieval store ends at the
-        # checkpoint. Therefore the current path and every candidate are based
-        # only on information that existed at that historical replay point.
         checkpoint_rows = rows[: current_end + 1]
         store = NumericalWindowStore.from_columns(
             timestamps=[r.timestamp for r in checkpoint_rows],
@@ -118,7 +115,6 @@ def evaluation(
         )
 
         top_rows = []
-        timestamp_to_index = {timestamp: i for i, timestamp in enumerate(timestamps)}
         for match in matches:
             match_end = timestamp_to_index.get(match.end_time)
             if match_end is None:
@@ -141,14 +137,15 @@ def evaluation(
             values = [m["outcomes"][str(h)]["return"] for m in top_rows if m["outcomes"].get(str(h)) is not None]
             mfe = [m["outcomes"][str(h)]["mfe"] for m in top_rows if m["outcomes"].get(str(h)) is not None]
             mae = [m["outcomes"][str(h)]["mae"] for m in top_rows if m["outcomes"].get(str(h)) is not None]
+            mean_return = sum(values) / len(values) if values else None
             aggregates[str(h)] = {
                 "sample_size": len(values),
-                "mean_return": sum(values) / len(values) if values else None,
+                "mean_return": mean_return,
                 "win_rate": sum(1 for v in values if v > 0) / len(values) if values else None,
                 "mean_mfe": sum(mfe) / len(mfe) if mfe else None,
                 "mean_mae": sum(mae) / len(mae) if mae else None,
                 "baseline_mean_return": baseline[str(h)],
-                "edge_vs_baseline": (sum(values) / len(values) - baseline[str(h)]) if values and baseline[str(h)] is not None else None,
+                "edge_vs_baseline": (mean_return - baseline[str(h)]) if mean_return is not None and baseline[str(h)] is not None else None,
             }
 
         evaluations.append({
@@ -159,6 +156,25 @@ def evaluation(
             "aggregates": aggregates,
         })
 
+    stability = {}
+    for h in HORIZONS:
+        values = [c["aggregates"][str(h)]["mean_return"] for c in evaluations if c["aggregates"][str(h)]["mean_return"] is not None]
+        edges = [c["aggregates"][str(h)]["edge_vs_baseline"] for c in evaluations if c["aggregates"][str(h)]["edge_vs_baseline"] is not None]
+        positive_return_checkpoints = sum(1 for v in values if v > 0)
+        positive_edge_checkpoints = sum(1 for v in edges if v > 0)
+        stability[str(h)] = {
+            "checkpoint_count": len(values),
+            "positive_return_checkpoints": positive_return_checkpoints,
+            "positive_return_fraction": positive_return_checkpoints / len(values) if values else None,
+            "positive_edge_checkpoints": positive_edge_checkpoints,
+            "positive_edge_fraction": positive_edge_checkpoints / len(edges) if edges else None,
+            "mean_return": sum(values) / len(values) if values else None,
+            "median_return": median(values) if values else None,
+            "mean_edge_vs_baseline": sum(edges) / len(edges) if edges else None,
+            "median_edge_vs_baseline": median(edges) if edges else None,
+        }
+
+    similarities = [c["top_match_similarity"] for c in evaluations if c["top_match_similarity"] is not None]
     return {
         "symbol": symbol,
         "timeframe": timeframe,
@@ -170,4 +186,11 @@ def evaluation(
         "evaluation_end_time": rows[checkpoint_indices[-1]].timestamp,
         "checkpoints": evaluations,
         "horizons": list(HORIZONS),
+        "stability": stability,
+        "similarity_stability": {
+            "checkpoint_count": len(similarities),
+            "min": min(similarities) if similarities else None,
+            "median": median(similarities) if similarities else None,
+            "max": max(similarities) if similarities else None,
+        },
     }
