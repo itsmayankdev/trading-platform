@@ -1,0 +1,42 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { Bell, CheckCircle2, Clock3, Trash2, Zap } from "lucide-react";
+import Link from "next/link";
+import Sidebar from "@/components/layout/Sidebar";
+
+type AlertRule = { id: string; symbol: string; timeframe: string; patternLength: number; similarity: number; agreement: number; enabled: boolean; createdAt: string };
+const KEY = "market-memory-alert-rules-v1";
+const DEFAULT: AlertRule[] = [];
+
+export default function AlertsPage() {
+  const [rules, setRules] = useState<AlertRule[]>(DEFAULT);
+  const [symbol, setSymbol] = useState("ETHUSDT");
+  const [timeframe, setTimeframe] = useState("5m");
+  const [patternLength, setPatternLength] = useState(45);
+  const [similarity, setSimilarity] = useState(95);
+  const [agreement, setAgreement] = useState(60);
+  const [collapsed, setCollapsed] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => { try { setRules(JSON.parse(localStorage.getItem(KEY) || "[]") as AlertRule[]); } catch { setRules([]); } }, []);
+  useEffect(() => { localStorage.setItem(KEY, JSON.stringify(rules)); }, [rules]);
+
+  function addRule() {
+    const rule: AlertRule = { id: crypto.randomUUID(), symbol, timeframe, patternLength, similarity, agreement, enabled: true, createdAt: new Date().toISOString() };
+    setRules((current) => [rule, ...current]); setSaved(true); window.setTimeout(() => setSaved(false), 1800);
+  }
+  function toggle(id: string) { setRules((current) => current.map((rule) => rule.id === id ? { ...rule, enabled: !rule.enabled } : rule)); }
+  function remove(id: string) { setRules((current) => current.filter((rule) => rule.id !== id)); }
+
+  return <main className="min-h-screen bg-[#070a0f] text-white">
+    <header className="sticky top-0 z-40 h-12 border-b border-white/8 bg-[#070a0f]"><div className="flex h-full items-center px-4 sm:px-5"><Link href="/" className="flex items-center gap-2.5"><div className="flex h-7 w-7 items-center justify-center rounded-md bg-white text-black"><Bell size={14} /></div><span className="text-sm font-semibold tracking-[0.12em]">MARKET MEMORY</span></Link><div className="ml-4 border-l border-white/8 pl-4 text-[10px] uppercase tracking-[0.14em] text-white/30">Pattern Alerts</div></div></header>
+    <div className="flex"><Sidebar symbol={symbol} collapsed={collapsed} onCollapsedChange={setCollapsed} onSymbolSelect={setSymbol} selectedSymbols={[symbol]} onWatchlistToggle={() => {}} /><div className="min-w-0 flex-1"><div className="mx-auto max-w-[1100px] px-4 py-6 sm:px-7 lg:px-10">
+      <div className="mb-6"><div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-amber-200/65">Pattern monitoring</div><h1 className="mt-1 text-2xl font-semibold tracking-tight">Pattern Alerts</h1><p className="mt-1 text-sm text-white/40">Create a rule for a historical pattern worth investigating. Alerts run while this workspace is open.</p></div>
+      <section className="rounded-lg border border-white/8 bg-[#0a0e15] p-5"><div className="flex items-center gap-2"><Zap size={16} className="text-amber-200" /><h2 className="text-sm font-semibold">Create an alert</h2></div><div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-5"><label className="text-xs text-white/45">Market<select value={symbol} onChange={(e) => setSymbol(e.target.value)} className="mt-2 h-9 w-full rounded-md border border-white/10 bg-[#080c12] px-2 text-sm text-white outline-none"><option>BTCUSDT</option><option>ETHUSDT</option><option>SOLUSDT</option></select></label><label className="text-xs text-white/45">Timeframe<select value={timeframe} onChange={(e) => setTimeframe(e.target.value)} className="mt-2 h-9 w-full rounded-md border border-white/10 bg-[#080c12] px-2 text-sm text-white outline-none"><option>5m</option><option>15m</option><option>1h</option></select></label><label className="text-xs text-white/45">Pattern<select value={patternLength} onChange={(e) => setPatternLength(Number(e.target.value))} className="mt-2 h-9 w-full rounded-md border border-white/10 bg-[#080c12] px-2 text-sm text-white outline-none"><option value={30}>30 candles</option><option value={45}>45 candles</option><option value={60}>60 candles</option></select></label><label className="text-xs text-white/45">Min. similarity<select value={similarity} onChange={(e) => setSimilarity(Number(e.target.value))} className="mt-2 h-9 w-full rounded-md border border-white/10 bg-[#080c12] px-2 text-sm text-white outline-none">{[90,92,94,95,96,97,98].map((n) => <option key={n} value={n}>{n}%+</option>)}</select></label><label className="text-xs text-white/45">Min. agreement<select value={agreement} onChange={(e) => setAgreement(Number(e.target.value))} className="mt-2 h-9 w-full rounded-md border border-white/10 bg-[#080c12] px-2 text-sm text-white outline-none">{[50,55,60,65,70,75].map((n) => <option key={n} value={n}>{n}%+</option>)}</select></label></div><div className="mt-5 flex items-center justify-between gap-3 border-t border-white/7 pt-4"><div className="text-[11px] text-white/25">Trigger when the current pattern reaches both thresholds.</div><button type="button" onClick={addRule} className="rounded-md bg-white px-4 py-2 text-xs font-semibold text-black transition hover:bg-white/90">{saved ? "Alert saved" : "Create alert"}</button></div></section>
+
+      <section className="mt-4"><div className="mb-2 flex items-center justify-between"><h2 className="text-sm font-semibold">Your alerts</h2><span className="text-[10px] text-white/25">{rules.length} rule{rules.length === 1 ? "" : "s"}</span></div>{rules.length === 0 ? <div className="rounded-lg border border-dashed border-white/10 px-5 py-10 text-center"><Bell size={20} className="mx-auto text-white/20" /><div className="mt-3 text-sm text-white/45">No alerts yet</div><div className="mt-1 text-xs text-white/25">Create a rule above to start monitoring a market pattern.</div></div> : <div className="space-y-2">{rules.map((rule) => <div key={rule.id} className="flex items-center gap-4 rounded-lg border border-white/8 bg-[#0a0e15] px-4 py-3"><button type="button" onClick={() => toggle(rule.id)} className={`relative h-5 w-9 shrink-0 rounded-full transition ${rule.enabled ? "bg-emerald-400/70" : "bg-white/10"}`} aria-label={rule.enabled ? "Disable alert" : "Enable alert"}><span className={`absolute top-1 h-3 w-3 rounded-full bg-white transition ${rule.enabled ? "left-5" : "left-1"}`} /></button><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2 text-sm font-semibold"><span>{rule.symbol.replace("USDT", "/USDT")}</span><span className="text-[10px] font-normal text-white/25">{rule.timeframe} · {rule.patternLength} candles</span></div><div className="mt-1 text-[11px] text-white/35">Similarity {rule.similarity}%+ · Historical agreement {rule.agreement}%+</div></div><div className="hidden items-center gap-1 text-[10px] text-white/20 sm:flex"><Clock3 size={12} /> While open</div><button type="button" onClick={() => remove(rule.id)} className="rounded p-2 text-white/20 hover:bg-white/5 hover:text-rose-300" aria-label="Delete alert"><Trash2 size={14} /></button></div>)}</div>}</section>
+      <div className="mt-4 flex gap-2 rounded-md border border-amber-200/10 bg-amber-200/[0.025] px-3 py-2 text-[10px] leading-4 text-white/30"><CheckCircle2 size={13} className="mt-0.5 shrink-0 text-amber-200/60" />This first alert layer stores your rules locally and monitors the live workspace. Server-side alerts, email/Telegram delivery, and background monitoring will be added when the alert service is introduced.</div>
+    </div></div></div>
+  </main>;
+}
