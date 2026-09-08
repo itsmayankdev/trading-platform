@@ -39,12 +39,15 @@ services:
     container_name: trading-api
     restart: unless-stopped
     environment:
-      APP_ENV: development
+      APP_ENV: ${APP_ENV:-development}
       APP_NAME: Trading Platform API
       DATABASE_URL: postgresql+psycopg://trading_app:trading_local_password@postgres:5432/trading
       REDIS_URL: redis://redis:6379/0
       BINANCE_API_KEY: ""
       BINANCE_API_SECRET: ""
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      ADMIN_SESSION_SECRET: ${ADMIN_SESSION_SECRET:-}
       PATTERN_SEARCH_PROFILE: ${PATTERN_SEARCH_PROFILE:-false}
     depends_on:
       postgres:
@@ -67,7 +70,7 @@ services:
     container_name: trading-ingestion-worker
     restart: unless-stopped
     environment:
-      APP_ENV: development
+      APP_ENV: ${APP_ENV:-development}
       APP_NAME: Trading Platform API
       DATABASE_URL: postgresql+psycopg://trading_app:trading_local_password@postgres:5432/trading
       REDIS_URL: redis://redis:6379/0
@@ -87,7 +90,7 @@ services:
     container_name: trading-ingestion-scheduler
     restart: unless-stopped
     environment:
-      APP_ENV: development
+      APP_ENV: ${APP_ENV:-development}
       APP_NAME: Trading Platform API
       DATABASE_URL: postgresql+psycopg://trading_app:trading_local_password@postgres:5432/trading
       REDIS_URL: redis://redis:6379/0
