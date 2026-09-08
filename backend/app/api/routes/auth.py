@@ -13,7 +13,7 @@ def _serialize(user:AdminUser)->dict:
 def _load_user(db:Session,user_id:int):
     return db.scalar(select(AdminUser).options(selectinload(AdminUser.roles).selectinload(AdminRole.permissions),selectinload(AdminUser.permissions),selectinload(AdminUser.module_overrides),selectinload(AdminUser.plan)).where(AdminUser.id==user_id))
 @router.post("/register")
-def register(body:dict=Body(...),response:Response=None,db:Session=Depends(get_db)):
+def register(response:Response,body:dict=Body(...),db:Session=Depends(get_db)):
     email=str(body.get("email","")).strip().lower();password=str(body.get("password",""));name=str(body.get("display_name","")).strip()
     if not email or "@" not in email:raise HTTPException(status_code=400,detail="Valid email is required")
     if db.scalar(select(AdminUser).where(AdminUser.email==email)):raise HTTPException(status_code=409,detail="An account with this email already exists")
@@ -22,7 +22,7 @@ def register(body:dict=Body(...),response:Response=None,db:Session=Depends(get_d
     if role:user.roles=[role]
     db.add(user);db.flush();user.last_seen_at=datetime.now(timezone.utc);db.commit();user=_load_user(db,user.id);set_user_cookie(response,user);return _serialize(user)
 @router.post("/login")
-def login(body:dict=Body(...),response:Response=None,db:Session=Depends(get_db)):
+def login(response:Response,body:dict=Body(...),db:Session=Depends(get_db)):
     email=str(body.get("email","")).strip().lower();password=str(body.get("password",""));user=db.scalar(select(AdminUser).where(AdminUser.email==email))
     if not user or not user.password_hash or not verify_password(password,user.password_hash):raise HTTPException(status_code=401,detail="Invalid email or password")
     if user.status!="active":raise HTTPException(status_code=403,detail=f"Account is {user.status}")
