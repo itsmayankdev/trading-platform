@@ -26,14 +26,7 @@ def _window(rows, start: int, length: int, symbol: str, timeframe: str) -> Patte
         start_time=selected[0].timestamp,
         end_time=selected[-1].timestamp,
         candles=tuple(
-            CandlePoint(
-                timestamp=r.timestamp,
-                open=r.open,
-                high=r.high,
-                low=r.low,
-                close=r.close,
-                volume=r.volume,
-            )
+            CandlePoint(timestamp=r.timestamp, open=r.open, high=r.high, low=r.low, close=r.close, volume=r.volume)
             for r in selected
         ),
     )
@@ -81,13 +74,16 @@ def evaluation(
         raise HTTPException(status_code=400, detail="Not enough candles for evaluation")
 
     timestamps = [r.timestamp for r in rows]
-    start_idx = pattern_length - 1
+    # Require enough history for at least one non-overlapping historical window
+    # before the first checkpoint. This prevents a misleading empty first row.
+    minimum_history_end = (pattern_length * 2) - 1
+    start_idx = max(minimum_history_end, pattern_length - 1)
     if start_time is not None:
-        start_idx = next((i for i, t in enumerate(timestamps) if t >= start_time), start_idx)
+        start_idx = max(start_idx, next((i for i, t in enumerate(timestamps) if t >= start_time), start_idx))
+
     end_idx = len(rows) - max(HORIZONS) - 1
     if end_time is not None:
         end_idx = min(end_idx, max(0, next((i for i, t in enumerate(timestamps) if t > end_time), len(rows)) - 1))
-    start_idx = max(pattern_length - 1, start_idx)
     if end_idx <= start_idx:
         raise HTTPException(status_code=400, detail="Evaluation range is too small for the selected pattern and horizon")
 
@@ -105,15 +101,13 @@ def evaluation(
         current_start = current_end - pattern_length + 1
         current = _window(rows, current_start, pattern_length, symbol, timeframe)
 
-        # Critical walk-forward rule: build the retrieval store only from candles
-        # available at this checkpoint. The current pattern must not come from the
-        # final dataset, otherwise every checkpoint evaluates the same pattern.
+        # Strict walk-forward isolation: the retrieval store ends at the
+        # checkpoint. Therefore the current path and every candidate are based
+        # only on information that existed at that historical replay point.
         checkpoint_rows = rows[: current_end + 1]
-        checkpoint_timestamps = [r.timestamp for r in checkpoint_rows]
-        checkpoint_closes = [r.close for r in checkpoint_rows]
         store = NumericalWindowStore.from_columns(
-            timestamps=checkpoint_timestamps,
-            closes=checkpoint_closes,
+            timestamps=[r.timestamp for r in checkpoint_rows],
+            closes=[r.close for r in checkpoint_rows],
             window_length=pattern_length,
         )
         matches = ranker.rank_numerical_v1(
@@ -124,8 +118,9 @@ def evaluation(
         )
 
         top_rows = []
+        timestamp_to_index = {timestamp: i for i, timestamp in enumerate(timestamps)}
         for match in matches:
-            match_end = next((i for i, t in enumerate(timestamps) if t == match.end_time), None)
+            match_end = timestamp_to_index.get(match.end_time)
             if match_end is None:
                 continue
             outcomes = {str(h): _forward(rows, match_end, h) for h in HORIZONS}
