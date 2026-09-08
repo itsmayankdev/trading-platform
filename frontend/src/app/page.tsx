@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Activity } from "lucide-react";
 import MarketChart from "@/components/MarketChart";
 import Sidebar from "@/components/layout/Sidebar";
@@ -27,6 +27,8 @@ export default function Home() {
   const [watchlist, setWatchlist] = useState<string[]>(WATCHLIST);
   const [liveQuote, setLiveQuote] = useState<LiveQuote | null>(null);
   const [highlightLocked, setHighlightLocked] = useState(true);
+  const [chartsFullscreen, setChartsFullscreen] = useState(false);
+  const chartWorkspaceRef = useRef<HTMLDivElement | null>(null);
 
   function selectSymbol(value: string) {
     setSymbol(value); setData(null); setError(""); setLiveQuote(null);
@@ -44,6 +46,23 @@ export default function Home() {
       return next;
     });
   }
+
+  async function toggleChartsFullscreen() {
+    const workspace = chartWorkspaceRef.current;
+    if (!workspace) return;
+    try {
+      if (document.fullscreenElement === workspace) await document.exitFullscreen();
+      else await workspace.requestFullscreen();
+    } catch {
+      // Fullscreen can be unavailable in embedded previews or restricted browsers.
+    }
+  }
+
+  useEffect(() => {
+    const onFullscreenChange = () => setChartsFullscreen(document.fullscreenElement === chartWorkspaceRef.current);
+    document.addEventListener("fullscreenchange", onFullscreenChange);
+    return () => document.removeEventListener("fullscreenchange", onFullscreenChange);
+  }, []);
 
   async function refreshLiveQuote() {
     try {
@@ -120,13 +139,15 @@ export default function Home() {
             {error && <div className="mb-3 rounded-md border border-red-400/15 bg-red-400/5 px-3 py-2 text-xs text-red-300">{error}</div>}
             {loading && !data && <div className="grid grid-cols-2 gap-3"><div className="panel h-[440px] animate-pulse" /><div className="panel h-[440px] animate-pulse" /></div>}
             {data && <div className="space-y-3">
-              <section className="grid grid-cols-2 gap-3">
-                <section className="panel overflow-hidden">
-                  <div className="flex h-12 items-center justify-between border-b border-white/8 px-3.5"><div><div className="text-[9px] font-semibold uppercase tracking-[0.14em] text-white/35">Current market</div><div className="mt-0.5 text-xs font-semibold">{data.symbol.replace("USDT", "/USDT")} <span className="text-white/20">·</span> {data.timeframe}</div></div><div className="font-mono text-[10px] text-white/30">{data.pattern_length} matched candles</div></div>
-                  <MarketChart symbol={data.symbol} timeframe={data.timeframe} patternLength={data.pattern_length} highlightLocked={highlightLocked} />
+              <div ref={chartWorkspaceRef} className={`${chartsFullscreen ? "h-screen bg-[#070a0f] p-3" : ""}`}>
+                <section className={`grid h-full min-h-0 grid-cols-2 gap-3 ${chartsFullscreen ? "" : ""}`}>
+                  <section className={`panel overflow-hidden ${chartsFullscreen ? "flex h-full min-h-0 flex-col" : ""}`}>
+                    <div className="flex h-12 shrink-0 items-center justify-between border-b border-white/8 px-3.5"><div><div className="text-[9px] font-semibold uppercase tracking-[0.14em] text-white/35">Current market</div><div className="mt-0.5 text-xs font-semibold">{data.symbol.replace("USDT", "/USDT")} <span className="text-white/20">·</span> {data.timeframe}</div></div><div className="font-mono text-[10px] text-white/30">{data.pattern_length} matched candles</div></div>
+                    <MarketChart symbol={data.symbol} timeframe={data.timeframe} patternLength={data.pattern_length} highlightLocked={highlightLocked} dashboardFullscreen={chartsFullscreen} onFullscreenToggle={() => void toggleChartsFullscreen()} />
+                  </section>
+                  <HistoricalPatternChart key={`${data.symbol}-${data.timeframe}-${data.pattern_length}`} symbol={data.symbol} timeframe={data.timeframe} patternLength={data.pattern_length} matches={data.matches} highlightLocked={highlightLocked} dashboardFullscreen={chartsFullscreen} onFullscreenToggle={() => void toggleChartsFullscreen()} />
                 </section>
-                <HistoricalPatternChart key={`${data.symbol}-${data.timeframe}-${data.pattern_length}`} symbol={data.symbol} timeframe={data.timeframe} patternLength={data.pattern_length} matches={data.matches} highlightLocked={highlightLocked} />
-              </section>
+              </div>
               <OutcomeStatistics statistics={data.statistics} />
               <footer className="flex flex-col gap-1 border-t border-white/6 py-3 text-[9px] uppercase tracking-[0.1em] text-white/18 sm:flex-row sm:items-center sm:justify-between"><span>Algorithm {data.algorithm_version} · Features {data.feature_version}</span><span>Historical outcomes do not guarantee future performance.</span></footer>
             </div>}
