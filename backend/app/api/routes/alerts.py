@@ -31,6 +31,8 @@ class AlertEvaluationRequest(BaseModel):
     current_enabled: bool = True
     favorites_enabled: bool = False
     historical_enabled: bool = False
+    named_enabled: bool = False
+    named_patterns: list[str] = Field(default_factory=list, max_length=10)
     match_mode: str = Field(default="any", pattern="^(any|all)$")
     favorite_windows: list[FavoriteWindow] = Field(default_factory=list, max_length=50)
     historical_window: PatternWindowRequest | None = None
@@ -52,6 +54,8 @@ def evaluate_alert(request: AlertEvaluationRequest, db: Session = Depends(get_db
             current_enabled=request.current_enabled,
             favorites_enabled=request.favorites_enabled,
             historical_enabled=request.historical_enabled,
+            named_enabled=request.named_enabled,
+            named_patterns=request.named_patterns,
             match_mode=request.match_mode,
         )
     except ValueError as exc:
