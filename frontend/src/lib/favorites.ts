@@ -1,3 +1,5 @@
+import type { MarketPatternDefinition } from "./marketPatterns";
+
 export type FavoritePattern = {
   id: string;
   name: string;
@@ -13,6 +15,7 @@ export type FavoritePattern = {
 };
 
 export const FAVORITES_STORAGE_KEY = "market-memory-favorite-patterns-v1";
+export const FAVORITE_MARKET_PATTERNS_STORAGE_KEY = "market-memory-favorite-market-patterns-v1";
 export const FAVORITES_CHANGED_EVENT = "market-memory-favorites-changed";
 
 export function readFavoritePatterns(): FavoritePattern[] {
@@ -42,4 +45,22 @@ export function removeFavoritePattern(id: string) {
   const next = readFavoritePatterns().filter((favorite) => favorite.id !== id);
   localStorage.setItem(FAVORITES_STORAGE_KEY, JSON.stringify(next));
   window.dispatchEvent(new Event(FAVORITES_CHANGED_EVENT));
+}
+
+export function readFavoriteMarketPatterns(): string[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const parsed = JSON.parse(localStorage.getItem(FAVORITE_MARKET_PATTERNS_STORAGE_KEY) || "[]");
+    return Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+export function toggleFavoriteMarketPattern(pattern: MarketPatternDefinition): boolean {
+  const ids = readFavoriteMarketPatterns();
+  const next = ids.includes(pattern.id) ? ids.filter((id) => id !== pattern.id) : [pattern.id, ...ids];
+  localStorage.setItem(FAVORITE_MARKET_PATTERNS_STORAGE_KEY, JSON.stringify(next));
+  window.dispatchEvent(new Event(FAVORITES_CHANGED_EVENT));
+  return next.includes(pattern.id);
 }
