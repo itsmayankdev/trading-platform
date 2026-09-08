@@ -7,15 +7,14 @@ import Sidebar from "@/components/layout/Sidebar";
 import HistoricalPatternChart from "@/components/pattern-search/HistoricalPatternChart";
 import OutcomeStatistics from "@/components/pattern-search/OutcomeStatistics";
 import PatternSummary from "@/components/pattern-search/PatternSummary";
+import ForwardPathChart from "@/components/pattern-search/ForwardPathChart";
 import SearchControls from "@/components/pattern-search/SearchControls";
 import type { SearchResponse } from "@/components/pattern-search/types";
 
 const WATCHLIST = ["BTCUSDT", "ETHUSDT", "SOLUSDT"];
 type LiveQuote = { price: number; change: number };
 
-function formatPrice(value: number) {
-  return new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value);
-}
+function formatPrice(value: number) { return new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value); }
 
 export default function Home() {
   const [symbol, setSymbol] = useState("ETHUSDT");
@@ -32,18 +31,10 @@ export default function Home() {
   const [chartsFullscreen, setChartsFullscreen] = useState(false);
   const chartWorkspaceRef = useRef<HTMLDivElement | null>(null);
 
-  function selectSymbol(value: string) {
-    setSymbol(value); setData(null); setError(""); setLiveQuote(null);
-  }
-  function changeTimeframe(value: string) {
-    setTimeframe(value); setData(null); setError(""); setLiveQuote(null);
-  }
-  function changePatternLength(value: string) {
-    setPatternLength(value); setData(null); setError("");
-  }
-  function changeTopK(value: string) {
-    setTopK(value); setData(null); setError("");
-  }
+  function selectSymbol(value: string) { setSymbol(value); setData(null); setError(""); setLiveQuote(null); }
+  function changeTimeframe(value: string) { setTimeframe(value); setData(null); setError(""); setLiveQuote(null); }
+  function changePatternLength(value: string) { setPatternLength(value); setData(null); setError(""); }
+  function changeTopK(value: string) { setTopK(value); setData(null); setError(""); }
   function toggleWatchlist(value: string) {
     setWatchlist((current) => {
       const next = current.includes(value) ? current.filter((item) => item !== value) : [...current, value];
@@ -51,38 +42,27 @@ export default function Home() {
       return next;
     });
   }
-
   async function toggleChartsFullscreen() {
     const workspace = chartWorkspaceRef.current;
     if (!workspace) return;
-    try {
-      if (document.fullscreenElement === workspace) await document.exitFullscreen();
-      else await workspace.requestFullscreen();
-    } catch {
-      // Fullscreen can be unavailable in embedded previews or restricted browsers.
-    }
+    try { if (document.fullscreenElement === workspace) await document.exitFullscreen(); else await workspace.requestFullscreen(); } catch { /* Embedded previews may block fullscreen. */ }
   }
-
   useEffect(() => {
     const onFullscreenChange = () => setChartsFullscreen(document.fullscreenElement === chartWorkspaceRef.current);
     document.addEventListener("fullscreenchange", onFullscreenChange);
     return () => document.removeEventListener("fullscreenchange", onFullscreenChange);
   }, []);
-
   async function refreshLiveQuote() {
     try {
       const params = new URLSearchParams({ symbol, timeframe, limit: "2" });
       const response = await fetch(`/api/backend/api/v1/candles?${params.toString()}`, { cache: "no-store" });
       if (!response.ok) return;
       const result = (await response.json()) as { candles: Array<{ close: number }> };
-      const candles = result.candles ?? [];
-      const latest = candles.at(-1)?.close;
-      const previous = candles.at(-2)?.close;
+      const candles = result.candles ?? []; const latest = candles.at(-1)?.close; const previous = candles.at(-2)?.close;
       if (latest == null) return;
       setLiveQuote({ price: latest, change: previous ? ((latest - previous) / previous) * 100 : 0 });
     } catch { /* Keep last known quote. */ }
   }
-
   async function searchPatterns() {
     const requestedTopK = Number(topK);
     if (!Number.isInteger(requestedTopK) || requestedTopK < 5 || requestedTopK > 50) return;
@@ -99,60 +79,26 @@ export default function Home() {
     } catch { setError("Could not reach the Pattern Engine. Check that FastAPI is running."); }
     finally { setLoading(false); }
   }
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => void searchPatterns(), 250);
-    return () => window.clearTimeout(timer);
-    // Automatic pattern analysis whenever any analysis control changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [symbol, timeframe, patternLength, topK]);
-
-  useEffect(() => {
-    const initialTimer = window.setTimeout(() => void refreshLiveQuote(), 0);
-    const interval = window.setInterval(() => void refreshLiveQuote(), 10000);
-    return () => { window.clearTimeout(initialTimer); window.clearInterval(interval); };
-    // Refresh live quote whenever instrument/timeframe changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [symbol, timeframe]);
+  useEffect(() => { const timer = window.setTimeout(() => void searchPatterns(), 250); return () => window.clearTimeout(timer); }, [symbol, timeframe, patternLength, topK]);
+  useEffect(() => { const initialTimer = window.setTimeout(() => void refreshLiveQuote(), 0); const interval = window.setInterval(() => void refreshLiveQuote(), 10000); return () => { window.clearTimeout(initialTimer); window.clearInterval(interval); }; }, [symbol, timeframe]);
 
   return (
     <main className="min-h-screen bg-[#070a0f] text-white">
-      <header className="sticky top-0 z-40 h-12 border-b border-white/8 bg-[#070a0f]">
-        <div className="flex h-full items-center px-4 sm:px-5">
-          <div className="flex items-center gap-2.5"><div className="flex h-7 w-7 items-center justify-center rounded-md bg-white text-black"><Activity size={15} /></div><span className="text-xs font-semibold tracking-[0.12em]">MARKET MEMORY</span></div>
-        </div>
-      </header>
-
+      <header className="sticky top-0 z-40 h-12 border-b border-white/8 bg-[#070a0f]"><div className="flex h-full items-center px-4 sm:px-5"><div className="flex items-center gap-2.5"><div className="flex h-7 w-7 items-center justify-center rounded-md bg-white text-black"><Activity size={15} /></div><span className="text-xs font-semibold tracking-[0.12em]">MARKET MEMORY</span></div></div></header>
       <div className="flex">
         <Sidebar symbol={symbol} collapsed={sidebarCollapsed} onCollapsedChange={setSidebarCollapsed} onSymbolSelect={selectSymbol} selectedSymbols={watchlist} onWatchlistToggle={toggleWatchlist} />
         <div className="min-w-0 flex-1">
           <SearchControls symbol={symbol} timeframe={timeframe} patternLength={patternLength} topK={topK} loading={loading} onSymbolChange={selectSymbol} onTimeframeChange={changeTimeframe} onPatternLengthChange={changePatternLength} onTopKChange={changeTopK} />
-
-          <div className="border-b border-white/7 bg-[#080c12] px-4 py-2 sm:px-5">
-            <div className="flex items-center gap-4 overflow-x-auto whitespace-nowrap">
-              <div className="flex items-center gap-2 pr-3 text-[10px] font-semibold uppercase tracking-[0.12em] text-white/45"><span className="h-1.5 w-1.5 rounded-full bg-emerald-400" /> {symbol.replace("USDT", "/USDT")}</div>
-              <div className="h-4 w-px bg-white/8" />
-              <div className="flex items-baseline gap-2"><span className="font-mono text-base font-semibold tabular-nums">{liveQuote ? formatPrice(liveQuote.price) : "—"}</span><span className={`font-mono text-[10px] tabular-nums ${liveQuote && liveQuote.change >= 0 ? "text-emerald-400" : "text-rose-400"}`}>{liveQuote ? `${liveQuote.change >= 0 ? "+" : ""}${liveQuote.change.toFixed(2)}%` : "Updating…"}</span></div>
-              <div className="h-4 w-px bg-white/8" />
-              <label className="flex cursor-pointer items-center gap-2 text-[9px] font-semibold uppercase tracking-[0.12em] text-white/45" title="HLT highlights the matched candles and locks both charts in place for reference">
-                <input type="checkbox" checked={highlightLocked} onChange={(event) => setHighlightLocked(event.target.checked)} className="h-3.5 w-3.5 accent-amber-300" />
-                <span>HLT</span>
-              </label>
-              <span className="hidden text-[9px] uppercase tracking-[0.1em] text-white/20 sm:inline">{highlightLocked ? "Highlight locked · charts fixed" : "Highlight off · charts movable"}</span>
-            </div>
-          </div>
-
+          <div className="border-b border-white/7 bg-[#080c12] px-4 py-2 sm:px-5"><div className="flex items-center gap-4 overflow-x-auto whitespace-nowrap"><div className="flex items-center gap-2 pr-3 text-[10px] font-semibold uppercase tracking-[0.12em] text-white/45"><span className="h-1.5 w-1.5 rounded-full bg-emerald-400" /> {symbol.replace("USDT", "/USDT")}</div><div className="h-4 w-px bg-white/8" /><div className="flex items-baseline gap-2"><span className="font-mono text-base font-semibold tabular-nums">{liveQuote ? formatPrice(liveQuote.price) : "—"}</span><span className={`font-mono text-[10px] tabular-nums ${liveQuote && liveQuote.change >= 0 ? "text-emerald-400" : "text-rose-400"}`}>{liveQuote ? `${liveQuote.change >= 0 ? "+" : ""}${liveQuote.change.toFixed(2)}%` : "Updating…"}</span></div><div className="h-4 w-px bg-white/8" /><label className="flex cursor-pointer items-center gap-2 text-[9px] font-semibold uppercase tracking-[0.12em] text-white/45" title="HLT highlights the matched candles and locks both charts in place for reference"><input type="checkbox" checked={highlightLocked} onChange={(event) => setHighlightLocked(event.target.checked)} className="h-3.5 w-3.5 accent-amber-300" /><span>HLT</span></label><span className="hidden text-[9px] uppercase tracking-[0.1em] text-white/20 sm:inline">{highlightLocked ? "Highlight locked · charts fixed" : "Highlight off · charts movable"}</span></div></div>
           <div className="mx-auto max-w-[1800px] px-3 py-3 sm:px-4 lg:px-5">
             {error && <div className="mb-3 rounded-md border border-red-400/15 bg-red-400/5 px-3 py-2 text-xs text-red-300">{error}</div>}
             {loading && !data && <div className="grid grid-cols-2 gap-3"><div className="panel h-[440px] animate-pulse" /><div className="panel h-[440px] animate-pulse" /></div>}
             {data && <div className="space-y-3">
               <PatternSummary data={data} />
+              <ForwardPathChart paths={data.forward_paths} />
               <div ref={chartWorkspaceRef} className={`${chartsFullscreen ? "h-screen bg-[#070a0f] p-3" : ""}`}>
                 <section className="grid h-full min-h-0 grid-cols-2 gap-3">
-                  <section className={`panel overflow-hidden ${chartsFullscreen ? "flex h-full min-h-0 flex-col" : ""}`}>
-                    <div className="flex h-12 shrink-0 items-center justify-between border-b border-white/8 px-3.5"><div><div className="text-[9px] font-semibold uppercase tracking-[0.14em] text-white/35">Current market</div><div className="mt-0.5 text-xs font-semibold">{data.symbol.replace("USDT", "/USDT")} <span className="text-white/20">·</span> {data.timeframe}</div></div><div className="font-mono text-[10px] text-white/30">{data.pattern_length} matched candles</div></div>
-                    <MarketChart symbol={data.symbol} timeframe={data.timeframe} patternLength={data.pattern_length} highlightLocked={highlightLocked} dashboardFullscreen={chartsFullscreen} onFullscreenToggle={() => void toggleChartsFullscreen()} />
-                  </section>
+                  <section className={`panel overflow-hidden ${chartsFullscreen ? "flex h-full min-h-0 flex-col" : ""}`}><div className="flex h-12 shrink-0 items-center justify-between border-b border-white/8 px-3.5"><div><div className="text-[9px] font-semibold uppercase tracking-[0.14em] text-white/35">Current market</div><div className="mt-0.5 text-xs font-semibold">{data.symbol.replace("USDT", "/USDT")} <span className="text-white/20">·</span> {data.timeframe}</div></div><div className="font-mono text-[10px] text-white/30">{data.pattern_length} matched candles</div></div><MarketChart symbol={data.symbol} timeframe={data.timeframe} patternLength={data.pattern_length} highlightLocked={highlightLocked} dashboardFullscreen={chartsFullscreen} onFullscreenToggle={() => void toggleChartsFullscreen()} /></section>
                   <HistoricalPatternChart key={`${data.symbol}-${data.timeframe}-${data.pattern_length}`} symbol={data.symbol} timeframe={data.timeframe} patternLength={data.pattern_length} matches={data.matches} highlightLocked={highlightLocked} dashboardFullscreen={chartsFullscreen} onFullscreenToggle={() => void toggleChartsFullscreen()} />
                 </section>
               </div>
