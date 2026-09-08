@@ -8,7 +8,6 @@ from sqlalchemy.orm import Session
 from backend.app.models.candle import Candle
 from backend.app.models.instrument import Instrument
 from pattern_engine.algorithms.v1 import SimilarityV1
-from pattern_engine.outcomes import calculate_outcomes
 from pattern_engine.window import CandlePoint, PatternWindow
 
 
@@ -82,25 +81,18 @@ class AlertEvaluationService:
         scorer = SimilarityV1()
         source_results: list[dict] = []
 
-        def historical_agreement(start_index: int, limit: int = 10) -> tuple[float | None, int]:
+        def directional_agreement(candidate_indices: list[int], limit: int = 10) -> tuple[float | None, int]:
             directions: list[int] = []
-            examined = 0
-            for index in range(start_index, len(rows) - pattern_length):
-                window_rows = rows[index : index + pattern_length]
-                if window_rows[-1].timestamp >= current.start_time:
-                    break
-                future_rows = rows[index + pattern_length : index + pattern_length + 60]
+            for start_index in candidate_indices[:limit]:
+                future_rows = rows[start_index + pattern_length : start_index + pattern_length + 60]
                 if not future_rows:
                     continue
-                entry = window_rows[-1].close
-                final = future_rows[-1].close
-                change = final / entry - 1.0
-                if change == 0:
-                    continue
-                directions.append(1 if change > 0 else -1)
-                examined += 1
-                if examined >= limit:
-                    break
+                entry = rows[start_index + pattern_length - 1].close
+                change = future_rows[-1].close / entry - 1.0
+                if change > 0:
+                    directions.append(1)
+                elif change < 0:
+                    directions.append(-1)
             if not directions:
                 return None, 0
             bullish = sum(direction > 0 for direction in directions)
@@ -122,10 +114,8 @@ class AlertEvaluationService:
             best_index = candidates[0][1] if candidates else None
             best_start = rows[best_index].timestamp if best_index is not None else None
             best_end = rows[best_index + pattern_length - 1].timestamp if best_index is not None else None
-            agreement_value = None
-            agreement_sample = 0
-            if best_index is not None:
-                agreement_value, agreement_sample = historical_agreement(best_index)
+            top_indices = [index for _, index in candidates]
+            agreement_value, agreement_sample = directional_agreement(top_indices)
             similarity_pass = best_similarity >= minimum_similarity
             agreement_pass = agreement_value is not None and agreement_value >= minimum_agreement
             filters_pass = similarity_pass and (not use_historical_filters or agreement_pass)
@@ -138,7 +128,7 @@ class AlertEvaluationService:
                 "match_start": best_start,
                 "match_end": best_end,
                 "reason": (
-                    "closest historical analog and its historical direction agreement passed"
+                    "closest historical analog and its top-match direction agreement passed"
                     if filters_pass
                     else "closest historical analog did not pass the configured historical filters"
                 ),
