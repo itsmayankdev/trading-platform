@@ -27,3 +27,54 @@ button, select, input { -webkit-tap-highlight-color: transparent; }
 .metric-positive,.metric-negative { display:inline-flex; align-items:center; gap:4px; font-size:13px; font-weight:600; }
 .metric-positive { color:#34d399; }
 .metric-negative { color:#fb7185; }
+
+/* Admin control plane typography: one deliberate scale across every admin tab. */
+@supports selector(body:has(main > header + div > aside)) {
+  body:has(main > header + div > aside) {
+    --admin-body-size: 12px;
+    --admin-small-size: 11px;
+    --admin-label-size: 12px;
+  }
+
+  body:has(main > header + div > aside) main > header + div > section {
+    font-size: var(--admin-body-size);
+  }
+
+  body:has(main > header + div > aside) main > header + div > section [class~="text-[7px]"],
+  body:has(main > header + div > aside) main > header + div > section [class~="text-[8px]"],
+  body:has(main > header + div > aside) main > header + div > section [class~="text-[9px]"] {
+    font-size: var(--admin-small-size) !important;
+    line-height: 1.35 !important;
+  }
+
+  body:has(main > header + div > aside) main > header + div > section [class~="text-[10px]"],
+  body:has(main > header + div > aside) main > header + div > section [class~="text-[11px]"] {
+    font-size: var(--admin-label-size) !important;
+    line-height: 1.4 !important;
+  }
+
+  body:has(main > header + div > aside) main > header + div > section [class~="text-[12px]"],
+  body:has(main > header + div > aside) main > header + div > section [class~="text-[13px]"] {
+    font-size: 13px !important;
+    line-height: 1.4 !important;
+  }
+
+  body:has(main > header + div > aside) main > header + div > section h1 {
+    font-size: 30px !important;
+    line-height: 1.12 !important;
+  }
+
+  body:has(main > header + div > aside) main > header + div > section table {
+    font-size: 11px;
+  }
+
+  body:has(main > header + div > aside) main > header + div > section input:not([type="checkbox"]),
+  body:has(main > header + div > aside) main > header + div > section select {
+    font-size: 13px !important;
+    line-height: 1.35 !important;
+  }
+
+  body:has(main > header + div > aside) main > header + div > section button {
+    line-height: 1.35;
+  }
+}
