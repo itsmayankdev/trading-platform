@@ -25,6 +25,8 @@ class AdminUser(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     email: Mapped[str] = mapped_column(String(320), unique=True, index=True)
     display_name: Mapped[str] = mapped_column(String(160), default="")
+    first_name: Mapped[str] = mapped_column(String(80), default="")
+    last_name: Mapped[str] = mapped_column(String(80), default="")
     password_hash: Mapped[str] = mapped_column(String(512), default="")
     status: Mapped[str] = mapped_column(String(32), default="active", index=True)
     plan_id: Mapped[int | None] = mapped_column(ForeignKey("admin_plans.id", ondelete="SET NULL"), nullable=True)
@@ -45,7 +47,7 @@ class AdminRole(Base):
     description: Mapped[str] = mapped_column(String(500), default="")
     system: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    users: Mapped[list[AdminUser]] = relationship(secondary=user_roles, back_populates="roles")
+    users: Mapped[list[AdminUser]] = relationship(secondary=user_roles, back_populates="users")
     permissions: Mapped[list[AdminPermission]] = relationship(secondary=role_permissions, back_populates="roles")
 
 class AdminPermission(Base):
@@ -55,7 +57,7 @@ class AdminPermission(Base):
     module: Mapped[str] = mapped_column(String(80), index=True)
     operation: Mapped[str] = mapped_column(String(80))
     description: Mapped[str] = mapped_column(String(300), default="")
-    roles: Mapped[list[AdminRole]] = relationship(secondary=role_permissions, back_populates="permissions")
+    roles: Mapped[list[AdminRole]] = relationship(secondary=role_permissions, back_populates="roles")
 
 class AdminUserModule(Base):
     __tablename__ = "admin_user_modules"
