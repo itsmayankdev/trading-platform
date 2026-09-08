@@ -1,6 +1,6 @@
 "use client";
 
-import { Activity, Bell, BarChart3, ChevronLeft, ChevronRight, FlaskConical, LayoutDashboard, ScanSearch, Star, X } from "lucide-react";
+import { Activity, Bell, BarChart3, ChevronLeft, ChevronRight, FlaskConical, LayoutDashboard, ScanSearch, Star, X, Globe2 } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
@@ -15,6 +15,7 @@ const MENU: MenuItem[] = [
   { label: "Pattern Alerts", href: "/alerts", icon: Bell, live: true },
   { label: "Replay Lab", href: "/replay", icon: Activity, live: true },
   { label: "Evaluation Lab", href: "/evaluation", icon: FlaskConical, live: true },
+  { label: "Cross-Market Validation", href: "/validation", icon: Globe2, live: true },
 ];
 
 export default function Sidebar({ symbol, collapsed, onCollapsedChange, onSymbolSelect, selectedSymbols, onWatchlistToggle }: SidebarProps) {
