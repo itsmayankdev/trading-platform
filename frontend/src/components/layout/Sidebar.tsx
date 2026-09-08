@@ -17,7 +17,7 @@ const MENU: MenuItem[] = [
   { label: "Market Memory", href: "/", icon: LayoutDashboard, live: true },
   { label: "Pattern Quality", href: "/evidence", icon: BarChart3, live: true },
   { label: "Market Scanner", href: "/scanner", icon: ScanSearch, live: true },
-  { label: "Pattern Alerts", href: "/alerts", icon: Bell },
+  { label: "Pattern Alerts", href: "/alerts", icon: Bell, live: true },
   { label: "Replay Lab", href: "/replay", icon: Activity },
   { label: "Evaluation Lab", href: "/evaluation", icon: FlaskConical },
 ];
