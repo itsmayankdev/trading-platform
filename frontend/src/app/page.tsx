@@ -21,6 +21,7 @@ export default function Home() {
   const [symbol, setSymbol] = useState("ETHUSDT");
   const [timeframe, setTimeframe] = useState("5m");
   const [patternLength, setPatternLength] = useState("45");
+  const [topK, setTopK] = useState("10");
   const [data, setData] = useState<SearchResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -39,6 +40,9 @@ export default function Home() {
   }
   function changePatternLength(value: string) {
     setPatternLength(value); setData(null); setError("");
+  }
+  function changeTopK(value: string) {
+    setTopK(value); setData(null); setError("");
   }
   function toggleWatchlist(value: string) {
     setWatchlist((current) => {
@@ -80,9 +84,11 @@ export default function Home() {
   }
 
   async function searchPatterns() {
+    const requestedTopK = Number(topK);
+    if (!Number.isInteger(requestedTopK) || requestedTopK < 5 || requestedTopK > 50) return;
     setLoading(true); setError(""); setData(null);
     try {
-      const params = new URLSearchParams({ symbol, timeframe, pattern_length: patternLength, top_k: "10" });
+      const params = new URLSearchParams({ symbol, timeframe, pattern_length: patternLength, top_k: String(requestedTopK) });
       const response = await fetch(`/api/backend/api/v1/pattern-search?${params.toString()}`, { cache: "no-store" });
       if (!response.ok) {
         let message = `API returned ${response.status}`;
@@ -95,11 +101,11 @@ export default function Home() {
   }
 
   useEffect(() => {
-    const timer = window.setTimeout(() => void searchPatterns(), 0);
+    const timer = window.setTimeout(() => void searchPatterns(), 250);
     return () => window.clearTimeout(timer);
     // Automatic pattern analysis whenever any analysis control changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [symbol, timeframe, patternLength]);
+  }, [symbol, timeframe, patternLength, topK]);
 
   useEffect(() => {
     const initialTimer = window.setTimeout(() => void refreshLiveQuote(), 0);
@@ -120,7 +126,7 @@ export default function Home() {
       <div className="flex">
         <Sidebar symbol={symbol} collapsed={sidebarCollapsed} onCollapsedChange={setSidebarCollapsed} onSymbolSelect={selectSymbol} selectedSymbols={watchlist} onWatchlistToggle={toggleWatchlist} />
         <div className="min-w-0 flex-1">
-          <SearchControls symbol={symbol} timeframe={timeframe} patternLength={patternLength} loading={loading} onSymbolChange={selectSymbol} onTimeframeChange={changeTimeframe} onPatternLengthChange={changePatternLength} />
+          <SearchControls symbol={symbol} timeframe={timeframe} patternLength={patternLength} topK={topK} loading={loading} onSymbolChange={selectSymbol} onTimeframeChange={changeTimeframe} onPatternLengthChange={changePatternLength} onTopKChange={changeTopK} />
 
           <div className="border-b border-white/7 bg-[#080c12] px-4 py-2 sm:px-5">
             <div className="flex items-center gap-4 overflow-x-auto whitespace-nowrap">
