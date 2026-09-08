@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { ArrowLeft, ArrowRight, CalendarDays, Loader2 } from "lucide-react";
-import { CandlestickSeries, ColorType, createChart, type CandlestickData, type Time } from "lightweight-charts";
+import { ArrowLeft, ArrowRight, CalendarDays, Loader2, Maximize2, Minimize2, RotateCcw } from "lucide-react";
+import { CandlestickSeries, ColorType, createChart, type CandlestickData, type IChartApi, type Time } from "lightweight-charts";
 import type { Match } from "./types";
 
 type Candle = { time: number; open: number; high: number; low: number; close: number };
@@ -18,7 +18,7 @@ function timeframeSeconds(timeframe: string) {
   return 300;
 }
 
-function positionPatternBox(chart: ReturnType<typeof createChart>, box: HTMLDivElement, candles: Candle[], patternLength: number) {
+function positionPatternBox(chart: IChartApi, box: HTMLDivElement, candles: Candle[], patternLength: number) {
   if (candles.length < patternLength) return;
   const left = chart.timeScale().timeToCoordinate(candles[0].time as Time);
   const right = chart.timeScale().timeToCoordinate(candles[patternLength - 1].time as Time);
@@ -30,9 +30,28 @@ function positionPatternBox(chart: ReturnType<typeof createChart>, box: HTMLDivE
 function HistoricalChartCanvas({ symbol, timeframe, patternLength, match, highlightLocked }: { symbol: string; timeframe: string; patternLength: number; match: Match; highlightLocked: boolean }) {
   const [candles, setCandles] = useState<Candle[]>([]);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
+  const [fullscreen, setFullscreen] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const chartRef = useRef<IChartApi | null>(null);
   const patternBoxRef = useRef<HTMLDivElement | null>(null);
   const candlesRef = useRef<Candle[]>([]);
+
+  function fitChart() {
+    chartRef.current?.timeScale().fitContent();
+    if (chartRef.current && patternBoxRef.current) {
+      positionPatternBox(chartRef.current, patternBoxRef.current, candlesRef.current, patternLength);
+    }
+  }
+
+  async function toggleFullscreen() {
+    if (!containerRef.current) return;
+    try {
+      if (document.fullscreenElement === containerRef.current) await document.exitFullscreen();
+      else await containerRef.current.requestFullscreen();
+    } catch {
+      // Fullscreen can be unavailable in embedded previews or restricted browsers.
+    }
+  }
 
   useEffect(() => {
     const controller = new AbortController();
@@ -56,11 +75,11 @@ function HistoricalChartCanvas({ symbol, timeframe, patternLength, match, highli
   }, [symbol, timeframe, patternLength, match]);
 
   useEffect(() => {
-    if (!containerRef.current) return;
     const container = containerRef.current;
+    if (!container) return;
     const chart = createChart(container, {
       width: container.clientWidth,
-      height: 380,
+      height: Math.max(300, container.clientHeight),
       layout: { background: { type: ColorType.Solid, color: "#0d1219" }, textColor: "#7f8999" },
       grid: { vertLines: { color: "rgba(255,255,255,0.035)" }, horzLines: { color: "rgba(255,255,255,0.035)" } },
       rightPriceScale: { borderColor: "rgba(255,255,255,0.08)" },
@@ -69,10 +88,11 @@ function HistoricalChartCanvas({ symbol, timeframe, patternLength, match, highli
       handleScroll: highlightLocked ? false : true,
       handleScale: highlightLocked ? false : true,
     });
+    chartRef.current = chart;
     const series = chart.addSeries(CandlestickSeries, { upColor: "#22c55e", downColor: "#ef4444", borderVisible: false, wickUpColor: "#22c55e", wickDownColor: "#ef4444" });
     const resizeObserver = new ResizeObserver(() => {
       if (!containerRef.current) return;
-      chart.applyOptions({ width: containerRef.current.clientWidth });
+      chart.applyOptions({ width: containerRef.current.clientWidth, height: Math.max(300, containerRef.current.clientHeight) });
       if (patternBoxRef.current) positionPatternBox(chart, patternBoxRef.current, candlesRef.current, patternLength);
     });
     resizeObserver.observe(container);
@@ -82,18 +102,38 @@ function HistoricalChartCanvas({ symbol, timeframe, patternLength, match, highli
       chart.timeScale().fitContent();
       if (patternBoxRef.current) positionPatternBox(chart, patternBoxRef.current, candles, patternLength);
     }
-    return () => { resizeObserver.disconnect(); chart.remove(); };
-  }, [candles, patternLength, highlightLocked]);
+    const onFullscreenChange = () => setFullscreen(document.fullscreenElement === container);
+    document.addEventListener("fullscreenchange", onFullscreenChange);
+    return () => {
+      document.removeEventListener("fullscreenchange", onFullscreenChange);
+      resizeObserver.disconnect();
+      chart.remove();
+      chartRef.current = null;
+    };
+    // The chart is rebuilt when candle data changes, not when HLT toggles.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [candles, patternLength]);
+
+  useEffect(() => {
+    chartRef.current?.applyOptions({ handleScroll: highlightLocked ? false : true, handleScale: highlightLocked ? false : true });
+    if (chartRef.current && patternBoxRef.current) {
+      positionPatternBox(chartRef.current, patternBoxRef.current, candlesRef.current, patternLength);
+    }
+  }, [highlightLocked, patternLength]);
 
   return (
-    <div className="relative">
+    <div ref={containerRef} className={`group relative h-[380px] w-full ${fullscreen ? "bg-[#0d1219]" : ""}`}>
+      <div className="pointer-events-none absolute right-2 top-2 z-30 flex gap-1 opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
+        <button type="button" aria-label="Fit historical chart to visible candles" title="Fit chart" onClick={fitChart} className="pointer-events-auto flex h-7 items-center gap-1 rounded border border-white/10 bg-[#090d13]/90 px-2 text-[8px] font-semibold uppercase tracking-[0.1em] text-white/60 shadow-lg backdrop-blur hover:text-white"><RotateCcw size={11} /> Fit</button>
+        <button type="button" aria-label={fullscreen ? "Exit fullscreen" : "Open chart fullscreen"} title={fullscreen ? "Exit fullscreen" : "Fullscreen"} onClick={() => void toggleFullscreen()} className="pointer-events-auto flex h-7 items-center justify-center rounded border border-white/10 bg-[#090d13]/90 px-2 text-white/60 shadow-lg backdrop-blur hover:text-white">{fullscreen ? <Minimize2 size={12} /> : <Maximize2 size={12} />}</button>
+      </div>
       <div className={`absolute inset-0 z-20 flex items-center justify-center bg-[#0b1017]/75 backdrop-blur-sm ${status === "loading" ? "" : "hidden"}`}><div className="flex items-center gap-2 text-xs text-white/45"><Loader2 size={15} className="animate-spin" /> Loading historical candles</div></div>
       {status === "error" && <div className="absolute left-4 top-4 z-20 rounded-md border border-red-400/15 bg-[#0b1017] px-3 py-2 text-xs text-red-300">Could not load this historical pattern.</div>}
-      <div ref={containerRef} className="relative h-[380px] w-full" />
-      {highlightLocked && <div ref={patternBoxRef} className="group absolute bottom-[28px] top-[8px] z-10 border border-amber-300/75 bg-amber-300/[0.07]" title={`Highlighted area = the matched ${patternLength}-candle pattern`}>
+      {highlightLocked && <div ref={patternBoxRef} className="group pointer-events-auto absolute bottom-[28px] top-[8px] z-10 border border-amber-300/75 bg-amber-300/[0.07]" title={`Highlighted area = the matched ${patternLength}-candle pattern`}>
         <span className="absolute left-1 top-1 rounded bg-amber-300/90 px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-[0.1em] text-black">Matched {patternLength}</span>
         <span className="pointer-events-none absolute left-1/2 top-9 hidden -translate-x-1/2 whitespace-nowrap rounded border border-white/10 bg-[#090d13] px-2 py-1 text-[9px] font-medium normal-case tracking-normal text-white/75 shadow-xl group-hover:block">Highlighted area = matched {patternLength} candles</span>
       </div>}
+      {!highlightLocked && <div className="pointer-events-none absolute right-2 top-10 z-10 rounded bg-black/35 px-1.5 py-1 text-[8px] uppercase tracking-[0.1em] text-white/25">HLT off · chart movable</div>}
     </div>
   );
 }
@@ -113,6 +153,6 @@ export default function HistoricalPatternChart({ symbol, timeframe, patternLengt
     </div>
     <HistoricalChartCanvas key={match.start_time} symbol={symbol} timeframe={timeframe} patternLength={patternLength} match={match} highlightLocked={highlightLocked} />
     <div className="border-t border-white/8 px-3 py-2 text-[9px] uppercase tracking-[0.1em] text-white/25">Matched window · next 45 candles show what happened afterward</div>
-    <div className="grid grid-cols-2 border-t border-white/8 sm:grid-cols-4">{[5, 15, 30, 60].map((horizon) => { const outcome = match.outcomes.find((item) => item.horizon_candles === horizon); return <div key={horizon} className="border-r border-white/6 px-3 py-2.5 last:border-r-0"><div className="text-[9px] uppercase tracking-[0.14em] text-white/25">+{horizon} candles</div><div className={`mt-0.5 font-mono text-sm ${outcome && outcome.forward_return >= 0 ? "text-emerald-400" : "text-rose-400"}`}>{outcome ? `${outcome.forward_return >= 0 ? "+" : ""}${(outcome.forward_return * 100).toFixed(2)}%` : "—"}</div></div>; })}</div>
+    <div className="grid grid-cols-2 border-t border-white/8 sm:grid-cols-4">{[5, 15, 30, 45].map((horizon) => { const outcome = match.outcomes.find((item) => item.horizon_candles === horizon); return <div key={horizon} className="border-r border-white/6 px-3 py-2.5 last:border-r-0"><div className="text-[9px] uppercase tracking-[0.14em] text-white/25">+{horizon} candles</div><div className={`mt-0.5 font-mono text-sm ${outcome && outcome.forward_return >= 0 ? "text-emerald-400" : "text-rose-400"}`}>{outcome ? `${outcome.forward_return >= 0 ? "+" : ""}${(outcome.forward_return * 100).toFixed(2)}%` : "—"}</div></div>; })}</div>
   </section>;
 }
