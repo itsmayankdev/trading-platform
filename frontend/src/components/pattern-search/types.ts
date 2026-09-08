@@ -28,6 +28,27 @@ export type ForwardPath = {
   values: number[];
 };
 
+export type QualityDiagnostics = {
+  match_count: number;
+  score: {
+    top: number | null;
+    median: number | null;
+    p25: number | null;
+    p75: number | null;
+    top_to_median: number | null;
+  };
+  temporal: {
+    clusters: number;
+    largest_cluster: number;
+    cluster_sizes: number[];
+    distinct_days: number;
+    distinct_months: number;
+    median_gap_candles: number | null;
+    nearest_gap_candles: number | null;
+    cluster_gap_candles: number;
+  };
+};
+
 export type SearchResponse = {
   symbol: string;
   timeframe: string;
@@ -41,4 +62,5 @@ export type SearchResponse = {
   matches: Match[];
   statistics: Statistic[];
   forward_paths: ForwardPath[];
+  quality_diagnostics?: QualityDiagnostics;
 };
