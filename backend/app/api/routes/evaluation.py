@@ -98,14 +98,30 @@ def evaluation(
         checkpoint_indices.append(end_idx)
     checkpoint_indices = sorted(set(checkpoint_indices))
 
-    store = NumericalWindowStore.from_columns(timestamps=timestamps, closes=[r.close for r in rows], window_length=pattern_length)
     ranker = PatternRanker()
     evaluations = []
 
     for current_end in checkpoint_indices:
         current_start = current_end - pattern_length + 1
         current = _window(rows, current_start, pattern_length, symbol, timeframe)
-        matches = ranker.rank_numerical_v1(current=current, store=store, top_k=top_k, min_separation_candles=pattern_length)
+
+        # Critical walk-forward rule: build the retrieval store only from candles
+        # available at this checkpoint. The current pattern must not come from the
+        # final dataset, otherwise every checkpoint evaluates the same pattern.
+        checkpoint_rows = rows[: current_end + 1]
+        checkpoint_timestamps = [r.timestamp for r in checkpoint_rows]
+        checkpoint_closes = [r.close for r in checkpoint_rows]
+        store = NumericalWindowStore.from_columns(
+            timestamps=checkpoint_timestamps,
+            closes=checkpoint_closes,
+            window_length=pattern_length,
+        )
+        matches = ranker.rank_numerical_v1(
+            current=current,
+            store=store,
+            top_k=top_k,
+            min_separation_candles=pattern_length,
+        )
 
         top_rows = []
         for match in matches:
