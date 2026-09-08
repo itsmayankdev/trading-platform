@@ -15,7 +15,7 @@ type SidebarProps = { symbol: string; collapsed: boolean; onCollapsedChange: (va
 type MenuItem = { label: string; href: string; icon: typeof LayoutDashboard; live?: boolean };
 const MENU: MenuItem[] = [
   { label: "Market Memory", href: "/", icon: LayoutDashboard, live: true },
-  { label: "Pattern Evidence", href: "/evidence", icon: BarChart3, live: true },
+  { label: "Pattern Quality", href: "/evidence", icon: BarChart3, live: true },
   { label: "Market Scanner", href: "/scanner", icon: ScanSearch, live: true },
   { label: "Pattern Alerts", href: "/alerts", icon: Bell },
   { label: "Replay Lab", href: "/replay", icon: Activity },
