@@ -72,18 +72,16 @@ class PatternSearchService:
             if profile:
                 timings[name] = time.perf_counter() - started
 
+        # Every selected market enters the warmup controller. If data already
+        # exists this is just a cheap coverage check; if not, the controller seeds
+        # the selected timeframe and schedules the remaining one-year history.
+        started = time.perf_counter()
+        ensure_market_data(symbol, timeframe, pattern_length + 1)
+        mark("on_demand_warmup", started)
+
         started = time.perf_counter()
         rows, cache_hit = _cached_rows(instrument_id, timeframe)
         mark("db_load", started)
-        if len(rows) < pattern_length + 1:
-            # Fast lane: fetch only enough recent candles to make the selected
-            # market immediately usable. The one-year history is completed in
-            # the background by ensure_market_data().
-            started = time.perf_counter()
-            ensure_market_data(symbol, timeframe, pattern_length + 1)
-            mark("on_demand_seed", started)
-            rows, cache_hit = _cached_rows(instrument_id, timeframe)
-
         if len(rows) < pattern_length + 1:
             raise ValueError("Market data is still warming up; please retry in a moment")
 
