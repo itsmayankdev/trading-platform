@@ -33,8 +33,8 @@ class InstrumentRegistrySync:
                         VALUES
                             (:symbol, 'crypto', 'binance', 'binance',
                              :base_asset, :quote_asset, :market_type,
-                             :status, :enabled, :now, :now,
-                             :status, TRUE, TRUE)
+                             :exchange_status, :enabled, :now, :now,
+                             :market_status, TRUE, TRUE)
                         ON CONFLICT (symbol) DO UPDATE SET
                             base_asset = EXCLUDED.base_asset,
                             quote_asset = EXCLUDED.quote_asset,
@@ -45,6 +45,7 @@ class InstrumentRegistrySync:
                             market_status = EXCLUDED.market_status,
                             is_spot_trading_allowed = TRUE,
                             is_listed = TRUE
+                        WHERE instruments.provider = 'binance'
                         """
                     ),
                     {
@@ -52,7 +53,8 @@ class InstrumentRegistrySync:
                         "base_asset": item.base_asset,
                         "quote_asset": item.quote_asset,
                         "market_type": item.market_type,
-                        "status": item.status,
+                        "exchange_status": item.status,
+                        "market_status": item.status,
                         "enabled": enabled,
                         "now": now,
                     },
