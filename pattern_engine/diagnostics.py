@@ -22,6 +22,7 @@ def build_match_diagnostics(
     candle_interval_seconds: float,
 ) -> dict:
     """Describe retrieval concentration without inventing a predictive score."""
+    # This value is part of the public diagnostic contract.
     cluster_gap = max(1.0, float(pattern_length * 2))
     if not starts or not scores or len(starts) != len(scores):
         return {
@@ -48,11 +49,11 @@ def build_match_diagnostics(
 
     cluster_sizes: list[int] = []
     current_size = 1
+    # A diagnostic cluster is an episode of temporally nearby matches. Treat a
+    # gap of at least one pattern span as a new episode; retain the two-span
+    # metric above for backwards-compatible reporting.
     for gap in gaps_candles:
-        # Keep the existing public two-span metric, but use the actual timestamp
-        # separation to avoid collapsing a clearly distinct multi-hour episode.
-        split = gap > cluster_gap or (gap >= pattern_length + 1 and gap > cluster_gap - 14)
-        if split:
+        if gap >= max(1.0, float(pattern_length)):
             cluster_sizes.append(current_size)
             current_size = 1
         else:
