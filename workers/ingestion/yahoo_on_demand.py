@@ -15,7 +15,7 @@ from market_data.providers.yahoo import YahooFinanceProvider
 _INTRADAY_FULL_DAYS = 60
 _ONE_MINUTE_FULL_DAYS = 7
 _DAILY_FULL_DAYS = 3650
-_FAST_INTRADAY_DAYS = 7
+_FAST_INTRADAY_DAYS = 2
 _FAST_DAILY_DAYS = 365
 _TIMEFRAMES = {"1m", "5m", "15m", "30m", "1h", "1d"}
 _MAX_WORKERS = 2
