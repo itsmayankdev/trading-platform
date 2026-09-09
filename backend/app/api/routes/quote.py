@@ -3,7 +3,6 @@ from sqlalchemy.orm import Session
 
 from backend.app.auth.user_auth import require_permission, require_user
 from backend.app.db.session import get_db
-from backend.app.services.instrument_sync import InstrumentSyncService
 from market_data.providers.binance_tickers import BinanceTickerProvider
 
 router = APIRouter(prefix="/api/v1", tags=["market"])
