@@ -7,7 +7,9 @@ export const MARKET_CONTEXT_EVENT = "market-memory-global-market-change";
 
 export type GlobalMarket = { symbol: string; timeframe?: string };
 
-export function normalizeMarketSymbol(value: string) { return value.trim().toUpperCase().replace(/[^A-Z0-9]/g, ""); }
+// Binance symbols remain unchanged; Yahoo Finance tickers may legitimately use
+// '.', '-', '^' and '=' (for example RELIANCE.NS, BRK-B, ^NSEI, EURUSD=X).
+export function normalizeMarketSymbol(value: string) { return value.trim().toUpperCase().replace(/[^A-Z0-9.^=_-]/g, ""); }
 
 export function readGlobalMarket(fallback = "ETHUSDT"): GlobalMarket {
   if (typeof window === "undefined") return { symbol: fallback };
