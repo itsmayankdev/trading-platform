@@ -28,8 +28,7 @@ def _coverage(symbol: str, timeframe: str) -> tuple[datetime | None, datetime | 
     with SessionLocal() as db:
         row = db.execute(text("""
             SELECT MIN(c.timestamp), MAX(c.timestamp), COUNT(*)
-            FROM candles c
-            JOIN instruments i ON i.id = c.instrument_id
+            FROM candles c JOIN instruments i ON i.id = c.instrument_id
             WHERE i.symbol = :symbol AND i.exchange = 'binance' AND i.provider = 'binance' AND c.timeframe = :timeframe
         """), {"symbol": symbol, "timeframe": timeframe}).one()
     return row[0], row[1], int(row[2] or 0)
@@ -38,8 +37,7 @@ def _coverage(symbol: str, timeframe: str) -> tuple[datetime | None, datetime | 
 def _active_job(symbol: str, timeframe: str) -> bool:
     with SessionLocal() as db:
         return db.execute(text("""
-            SELECT 1 FROM ingestion_jobs
-            WHERE symbol = :symbol AND timeframe = :timeframe AND status IN ('queued', 'running') LIMIT 1
+            SELECT 1 FROM ingestion_jobs WHERE symbol = :symbol AND timeframe = :timeframe AND status IN ('queued', 'running') LIMIT 1
         """), {"symbol": symbol, "timeframe": timeframe}).first() is not None
 
 
@@ -91,20 +89,26 @@ def _run_and_release(symbol: str, timeframe: str) -> None:
 
 
 def _submit_full_history(symbol: str) -> None:
-    symbol = symbol.upper()
     for timeframe in _TIMEFRAMES:
-        key = (symbol, timeframe)
+        key = (symbol.upper(), timeframe)
         with _lock:
             existing = _running.get(key)
             if existing is not None and not existing.done():
                 continue
-            _running[key] = _executor.submit(_run_and_release, symbol, timeframe)
+            _running[key] = _executor.submit(_run_and_release, symbol.upper(), timeframe)
 
 
 def ensure_market_data(symbol: str, timeframe: str, minimum_candles: int) -> dict[str, object]:
-    """Existing Binance warmup path; Yahoo is dispatched before this function by the shared API layer."""
+    """Provider dispatcher with the existing Binance path left intact."""
     symbol = symbol.upper()
     timeframe = timeframe.lower()
+    with SessionLocal() as db:
+        provider = db.execute(text("SELECT provider FROM instruments WHERE symbol = :symbol LIMIT 1"), {"symbol": symbol}).scalar_one_or_none()
+    if provider == "yahoo":
+        from workers.ingestion.yahoo_on_demand import ensure_yahoo_market_data
+        return ensure_yahoo_market_data(symbol=symbol, timeframe=timeframe, minimum_candles=minimum_candles)
+    if provider not in (None, "binance"):
+        raise ValueError(f"Unsupported market provider: {provider}")
     if timeframe not in TIMEFRAME_MINUTES:
         raise ValueError(f"Unsupported timeframe: {timeframe}")
     min_time, max_time, count = _coverage(symbol, timeframe)
