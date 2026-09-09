@@ -63,16 +63,18 @@ Market candle loading adds stale-while-revalidate behavior: retained candles pai
 
 A chart request for `5m` schedules only `5m` history warming. It does not automatically start `15m` or `1h` downloads. Other timeframes are loaded when requested or promoted by the scheduler.
 
-## 7. Pattern retrieval
+## 7. Pattern retrieval and match quality
 
-Pattern ranking keeps V1 scoring semantics unchanged while bounding temporary memory. Long histories are processed in chunks, producing the same score for every candidate without materializing the entire normalized-window matrix at once.
+Pattern Search now uses a two-stage production pipeline:
 
-The next retrieval stage should remain two-phase:
+1. **Broad candidate retrieval:** fast, exact V1 close-path retrieval produces a large candidate pool without diversity filtering.
+2. **Structural re-ranking:** production V3 re-ranks that pool using OHLCV structure, including normalized close path, returns, candle body/wicks/range/close location, and relative volume.
 
-1. cheap numerical candidate generation
-2. exact/high-cost validation only for the best candidates
+Final diversity/separation is applied only after structural re-ranking so candidate generation does not discard potentially better structural matches prematurely.
 
-No accuracy-affecting approximation should be introduced without a benchmark proving equivalence or an explicit product decision.
+V3 uses a conservative score aggregation with a candle-structure gate. A strong close-path match cannot by itself produce a near-perfect final match when the candle structure disagrees. The production version is centrally controlled through the algorithm registry.
+
+Long histories remain memory-bounded during candidate generation. No accuracy-affecting approximation should be introduced without a benchmark proving equivalence or an explicit product decision.
 
 ## 8. Database strategy
 
