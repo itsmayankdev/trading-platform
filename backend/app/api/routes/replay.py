@@ -10,6 +10,7 @@ from backend.app.repositories.instrument import InstrumentRepository
 from pattern_engine.retrieval.numerical import NumericalWindowStore
 from pattern_engine.ranking import PatternRanker
 from pattern_engine.window import CandlePoint, PatternWindow
+from workers.ingestion.on_demand import ensure_market_data
 
 router = APIRouter(prefix="/api/v1", tags=["replay"])
 instrument_repository = InstrumentRepository()
@@ -20,6 +21,11 @@ def replay_search(request: Request, symbol: str = Query(default="ETHUSDT", min_l
     symbol, timeframe = symbol.upper(), timeframe.lower()
     instrument = instrument_repository.get_by_symbol(db=db, symbol=symbol)
     if instrument is None: raise HTTPException(status_code=404, detail=f"Instrument not found: {symbol}")
+    try:
+        ensure_market_data(symbol=symbol, timeframe=timeframe, minimum_candles=pattern_length + 1)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    db.expire_all()
     rows = list(db.execute(select(Candle.timestamp, Candle.open, Candle.high, Candle.low, Candle.close, Candle.volume).where(Candle.instrument_id == instrument.id, Candle.timeframe == timeframe, Candle.timestamp <= replay_time).order_by(Candle.timestamp.asc())).all())
     if len(rows) < pattern_length + 1: raise HTTPException(status_code=400, detail="Not enough completed candles before replay time")
     timestamps, closes = [r.timestamp for r in rows], [r.close for r in rows]
