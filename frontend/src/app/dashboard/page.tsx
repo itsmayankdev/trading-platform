@@ -10,6 +10,7 @@ import PatternSummary from "@/components/pattern-search/PatternSummary";
 import SearchControls from "@/components/pattern-search/SearchControls";
 import PinPatternDialog from "@/components/pattern-search/PinPatternDialog";
 import type { SearchResponse } from "@/components/pattern-search/types";
+import { prefetchMarketCandles } from "@/lib/marketCache";
 import { readFavoritePatterns, type FavoritePattern } from "@/lib/favorites";
 
 type LiveQuote = { price: number; change: number };
@@ -44,7 +45,12 @@ export default function Dashboard() {
     } catch {}
   }, []);
 
+  function warmChart(value: string, nextTimeframe = timeframe) {
+    void prefetchMarketCandles(value, nextTimeframe, Math.max(Number(patternLength) * 2, 120)).catch(() => {});
+  }
+
   function selectSymbol(value: string) {
+    warmChart(value);
     setSymbol(value);
     setError("");
     setLiveQuote(null);
@@ -52,7 +58,14 @@ export default function Dashboard() {
     void fetch(`/api/backend/api/v1/instruments/usage?symbol=${encodeURIComponent(value)}`, { method: "POST", credentials: "include", cache: "no-store" }).catch(() => {});
   }
 
-  function changeTimeframe(value: string) { setTimeframe(value); setError(""); setLiveQuote(null); setSelectedMatchIndex(0); }
+  function changeTimeframe(value: string) {
+    warmChart(symbol, value);
+    setTimeframe(value);
+    setError("");
+    setLiveQuote(null);
+    setSelectedMatchIndex(0);
+  }
+
   function changePatternLength(value: string) { setPatternLength(value); setError(""); setSelectedMatchIndex(0); }
   function changeTopK(value: string) { setTopK(value); setError(""); setSelectedMatchIndex(0); }
 
@@ -85,6 +98,7 @@ export default function Dashboard() {
     const favorite = readFavoritePatterns().find((item) => item.id === id);
     if (!favorite) return;
     favoriteMatchIndexRef.current = favorite.matchIndex ?? null;
+    warmChart(favorite.symbol, favorite.timeframe);
     setSymbol(favorite.symbol);
     setTimeframe(favorite.timeframe);
     setPatternLength(String(favorite.patternLength));
@@ -141,9 +155,6 @@ export default function Dashboard() {
     }
   }
 
-  // No artificial 250ms debounce: symbol/timeframe changes are deliberate user
-  // actions, so start the request immediately. AbortController prevents stale
-  // results from an older selection from replacing the newest one.
   useEffect(() => { void searchPatterns(); return () => searchAbortRef.current?.abort(); }, [symbol, timeframe, patternLength, topK]);
 
   useEffect(() => {
@@ -163,9 +174,6 @@ export default function Dashboard() {
     setPinTarget({ type: "historical", symbol: data.symbol, timeframe: data.timeframe, patternLength: data.pattern_length, startTime: match.start_time, endTime: match.end_time, similarityScore: match.similarity_score, matchIndex: selectedMatchIndex });
   }
 
-  const currentChartSymbol = symbol;
-  const currentChartTimeframe = timeframe;
-
   return (
     <main className="min-h-screen bg-[#070a0f] text-white">
       <header className="sticky top-0 z-40 h-12 border-b border-white/8 bg-[#070a0f]"><div className="flex h-full items-center px-4 sm:px-5"><div className="flex items-center gap-2.5"><div className="flex h-7 w-7 items-center justify-center rounded-md bg-white text-black"><Activity size={15} /></div><span className="text-xs font-semibold tracking-[0.12em]">MARKET MEMORY</span></div></div></header>
@@ -177,8 +185,8 @@ export default function Dashboard() {
             {error && <div className="mb-3 flex items-center justify-between gap-3 rounded-md border border-red-400/15 bg-red-400/5 px-3 py-2 text-xs text-red-300"><span>{error}</span><button type="button" onClick={() => void searchPatterns()} className="rounded border border-red-300/15 px-2 py-1 text-[9px] uppercase tracking-[0.1em] text-red-200/80 hover:bg-red-300/5">Retry</button></div>}
             <div ref={chartWorkspaceRef} className={`${chartsFullscreen ? "h-screen bg-[#070a0f] p-3" : ""}`}><section className="grid h-full min-h-0 grid-cols-2 gap-3">
               <section className={`panel overflow-hidden ${chartsFullscreen ? "flex h-full min-h-0 flex-col" : ""}`}>
-                <div className="flex h-12 shrink-0 items-center justify-between border-b border-white/8 px-3.5"><div><div className="text-[9px] font-semibold uppercase tracking-[0.14em] text-white/35">Current market</div><div className="mt-0.5 text-xs font-semibold">{currentChartSymbol.replace("USDT", "/USDT")} <span className="text-white/20">·</span> {currentChartTimeframe}</div></div><div className="font-mono text-[10px] text-white/30">{data?.pattern_length ?? Number(patternLength)} matched candles</div></div>
-                <MarketChart symbol={currentChartSymbol} timeframe={currentChartTimeframe} patternLength={Number(patternLength)} highlightLocked={highlightLocked} dashboardFullscreen={chartsFullscreen} onFullscreenToggle={() => void toggleChartsFullscreen()} onPin={pinCurrent} />
+                <div className="flex h-12 shrink-0 items-center justify-between border-b border-white/8 px-3.5"><div><div className="text-[9px] font-semibold uppercase tracking-[0.14em] text-white/35">Current market</div><div className="mt-0.5 text-xs font-semibold">{symbol.replace("USDT", "/USDT")} <span className="text-white/20">·</span> {timeframe}</div></div><div className="font-mono text-[10px] text-white/30">{data?.pattern_length ?? Number(patternLength)} matched candles</div></div>
+                <MarketChart symbol={symbol} timeframe={timeframe} patternLength={Number(patternLength)} highlightLocked={highlightLocked} dashboardFullscreen={chartsFullscreen} onFullscreenToggle={() => void toggleChartsFullscreen()} onPin={pinCurrent} />
               </section>
               {data ? <HistoricalPatternChart symbol={data.symbol} timeframe={data.timeframe} patternLength={data.pattern_length} matches={data.matches} highlightLocked={highlightLocked} dashboardFullscreen={chartsFullscreen} onFullscreenToggle={() => void toggleChartsFullscreen()} onPin={pinHistorical} selectedIndex={selectedMatchIndex} onSelectedIndexChange={setSelectedMatchIndex} /> : <section className="panel flex min-h-[440px] items-center justify-center"><div className="text-[10px] uppercase tracking-[0.12em] text-white/25">Searching historical matches…</div></section>}
             </section></div>
