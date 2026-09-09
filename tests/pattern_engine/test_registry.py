@@ -6,10 +6,10 @@ from pattern_engine.algorithms.v3 import SimilarityV3
 from pattern_engine.registry import PRODUCTION_ALGORITHM_VERSION, get_algorithm, list_algorithms
 
 
-def test_production_algorithm_is_v3():
+def test_production_algorithm_is_v1():
     algorithm = get_algorithm()
-    assert PRODUCTION_ALGORITHM_VERSION == "similarity_v3"
-    assert isinstance(algorithm, SimilarityV3)
+    assert PRODUCTION_ALGORITHM_VERSION == "similarity_v1"
+    assert isinstance(algorithm, SimilarityV1)
 
 
 def test_research_versions_are_explicitly_selectable():
