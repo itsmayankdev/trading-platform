@@ -6,18 +6,14 @@ from pattern_engine.window import PatternWindow
 
 
 class SimilarityV3:
-    """Structural OHLCV matcher used by production pattern search.
-
-    The score is intentionally harder to achieve than close-only similarity.
-    It evaluates price path, returns, candle geometry, range behavior and
-    relative volume, then combines the component similarities geometrically so
-    a strong close-path match cannot conceal poor candle structure.
-    """
+    """Strict structural OHLCV matcher used by production pattern search."""
 
     version = "similarity_v3"
     feature_version = "ohlcv_structure_v1"
 
-    WEIGHTS = {"close_path": 0.30, "returns": 0.20, "candle": 0.35, "volume": 0.15}
+    # Candle geometry is the strongest visual/structural signal. Close path and
+    # returns retain trend/trajectory information; volume is deliberately lighter.
+    WEIGHTS = {"close_path": 0.30, "returns": 0.20, "candle": 0.40, "volume": 0.10}
     SCALES = {"close_path": 0.08, "returns": 0.025, "candle": 0.08, "volume": 2.0}
 
     @staticmethod
@@ -48,7 +44,8 @@ class SimilarityV3:
         upper_wick = (highs - np.maximum(opens, closes)) / closes
         lower_wick = (np.minimum(opens, closes) - lows) / closes
         total_range = (highs - lows) / closes
-        candle = np.column_stack((body, upper_wick, lower_wick, total_range)).reshape(-1)
+        close_location = (closes - lows) / np.maximum(highs - lows, closes * 1e-9)
+        candle = np.column_stack((body, upper_wick, lower_wick, total_range, close_location)).reshape(-1)
 
         log_volume = np.log1p(volumes)
         median_volume = float(np.median(log_volume))
@@ -79,7 +76,10 @@ class SimilarityV3:
             self.WEIGHTS[name] * np.log(max(similarities[name], 1e-12))
             for name in self.WEIGHTS
         )
-        return float(np.clip(np.exp(weighted_log), 0.0, 1.0))
+        # A structural gate prevents a very strong close path from producing a
+        # misleadingly high overall match when candle geometry is poor.
+        structural_cap = 0.45 + 0.55 * similarities["candle"]
+        return float(np.clip(min(np.exp(weighted_log), structural_cap), 0.0, 1.0))
 
     def score_many(self, current: PatternWindow, historical_windows: list[PatternWindow]) -> np.ndarray:
         if not historical_windows:
