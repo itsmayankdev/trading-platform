@@ -6,6 +6,9 @@ import { normalizeMarketSymbol } from "@/lib/marketContext";
 
 type Instrument = { symbol: string; base_asset?: string | null; quote_asset?: string | null; status?: string | null; quote_volume_24h?: number | null };
 type MarketSelectorProps = { value: string; onChange: (symbol: string) => void; className?: string };
+type CacheEntry = { at: number; items: Instrument[] };
+const CACHE_TTL = 30_000;
+const resultCache = new Map<string, CacheEntry>();
 
 function compactVolume(value: number | null | undefined) {
   if (value == null || !Number.isFinite(value)) return "—";
@@ -17,25 +20,33 @@ function compactVolume(value: number | null | undefined) {
 
 export default function MarketSelector({ value, onChange, className = "" }: MarketSelectorProps) {
   const [query, setQuery] = useState(value);
-  const [results, setResults] = useState<Instrument[]>([]);
+  const [results, setResults] = useState<Instrument[]>(() => resultCache.get(`q:${value.toUpperCase()}`)?.items ?? []);
   const [open, setOpen] = useState(false);
   const [browseMode, setBrowseMode] = useState(false);
 
   useEffect(() => setQuery(value), [value]);
   useEffect(() => {
     const controller = new AbortController();
+    const search = browseMode ? "" : query.trim().toUpperCase();
+    const key = `${browseMode ? "b" : "q"}:${search}`;
+    const cached = resultCache.get(key);
+    if (cached && Date.now() - cached.at < CACHE_TTL) {
+      setResults(cached.items);
+      return () => controller.abort();
+    }
     const timer = window.setTimeout(async () => {
-      const search = browseMode ? "" : query.trim().toUpperCase();
       const params = new URLSearchParams({ search, limit: "12", status: "TRADING", sort: "volume" });
       try {
         const response = await fetch(`/api/backend/api/v1/instruments?${params.toString()}`, { cache: "no-store", signal: controller.signal });
         if (!response.ok) return;
         const payload = await response.json();
-        setResults(Array.isArray(payload?.instruments) ? payload.instruments : []);
+        const items = Array.isArray(payload?.instruments) ? payload.instruments as Instrument[] : [];
+        resultCache.set(key, { at: Date.now(), items });
+        setResults(items);
       } catch {
         if (!controller.signal.aborted) setResults([]);
       }
-    }, 120);
+    }, 80);
     return () => { window.clearTimeout(timer); controller.abort(); };
   }, [query, browseMode]);
 
