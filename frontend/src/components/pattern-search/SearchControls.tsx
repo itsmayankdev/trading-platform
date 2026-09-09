@@ -91,7 +91,7 @@ export default function SearchControls({
   return (
     <section className="relative z-30 border-b border-white/[0.07] bg-[#080b10] px-3 py-2 sm:px-4">
       <div className="flex w-full min-w-0 items-center gap-2">
-        <div className="relative min-w-0 flex-1 sm:flex-none sm:w-[320px]">
+        <div className="relative min-w-0 flex-1 sm:flex-none sm:w-[260px]">
           <MarketSelector value={symbol} onChange={selectMarket} className="w-full" />
         </div>
 
