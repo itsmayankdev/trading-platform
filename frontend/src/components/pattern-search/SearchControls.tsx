@@ -1,133 +1,47 @@
 "use client";
 
-import { Check, Search, SlidersHorizontal, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { Check, Search, SlidersHorizontal, Star, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
-type SearchControlsProps = {
-  symbol: string;
-  timeframe: string;
-  patternLength: string;
-  topK: string;
-  loading: boolean;
-  liveQuote?: { price: number; change: number } | null;
-  onSymbolChange: (value: string) => void;
-  onTimeframeChange: (value: string) => void;
-  onPatternLengthChange: (value: string) => void;
-  onTopKChange: (value: string) => void;
-};
+type SearchControlsProps = { symbol:string; timeframe:string; patternLength:string; topK:string; loading:boolean; liveQuote?:{price:number;change:number}|null; onSymbolChange:(value:string)=>void; onTimeframeChange:(value:string)=>void; onPatternLengthChange:(value:string)=>void; onTopKChange:(value:string)=>void };
+type Instrument = { symbol:string; base_asset:string; quote_asset:string; status:string; spot_trading_allowed:boolean; coverage?:Record<string,{candle_count:number;start_time:string|null;end_time:string|null}> };
+const TIMEFRAMES=[{value:"5m",label:"5m",detail:"5 minutes"},{value:"15m",label:"15m",detail:"15 minutes"},{value:"1h",label:"1H",detail:"1 hour"}];
+const PATTERN_LENGTHS=["20","30","45","60","90"]; const MATCH_COUNTS=["5","10","20","50"];
+const FAVORITES_KEY="market-memory-market-favorites-v1"; const RECENTS_KEY="market-memory-recent-markets-v1"; const QUOTES=["ALL","USDT","USDC","BTC","ETH","BNB","FDUSD"]; const STATUSES=["TRADING","ALL"];
+const formatPrice=(value:number)=>new Intl.NumberFormat("en-US",{minimumFractionDigits:2,maximumFractionDigits:2}).format(value);
+const formatCoverage=(count:number)=>count>=1_000_000?`${(count/1_000_000).toFixed(1)}M`:count>=1_000?`${Math.round(count/1_000)}k`:String(count);
+function PillButton({active,onClick,children,title}:{active:boolean;onClick:()=>void;children:React.ReactNode;title?:string}){return <button type="button" title={title} onClick={onClick} className={`h-8 shrink-0 rounded-md px-2.5 text-xs font-medium transition ${active?"bg-white/[0.11] text-white ring-1 ring-white/[0.13]":"text-white/45 hover:bg-white/[0.045] hover:text-white/80"}`}>{children}</button>}
+function scoreInstrument(item:Instrument,query:string){const q=query.trim().toLowerCase();if(!q)return 10;const s=item.symbol.toLowerCase(),b=item.base_asset.toLowerCase(),quote=item.quote_asset.toLowerCase();if(s===q||b===q)return 0;if(s.startsWith(q)||b.startsWith(q))return 1;if(s.includes(q)||b.includes(q))return 2;if(quote===q||quote.startsWith(q))return 3;return 99}
+function readSymbols(key:string){if(typeof window==="undefined")return [] as string[];try{const v=JSON.parse(localStorage.getItem(key)||"[]");return Array.isArray(v)?v.filter((x):x is string=>typeof x==="string"):[]}catch{return [] as string[]}}
+function saveSymbols(key:string,values:string[]){try{localStorage.setItem(key,JSON.stringify(values))}catch{}}
 
-type Instrument = {
-  symbol: string;
-  base_asset: string;
-  quote_asset: string;
-  status: string;
-  spot_trading_allowed: boolean;
-  coverage?: Record<string, { candle_count: number; start_time: string | null; end_time: string | null }>;
-};
-
-const TIMEFRAMES = [{ value: "5m", label: "5m", detail: "5 minutes" }, { value: "15m", label: "15m", detail: "15 minutes" }, { value: "1h", label: "1H", detail: "1 hour" }];
-const PATTERN_LENGTHS = ["20", "30", "45", "60", "90"];
-const MATCH_COUNTS = ["5", "10", "20", "50"];
-const formatPrice = (value: number) => new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value);
-const formatCoverage = (count: number) => count >= 1_000_000 ? `${(count / 1_000_000).toFixed(1)}M` : count >= 1_000 ? `${Math.round(count / 1_000)}k` : String(count);
-const formatSymbol = (value: string) => value.endsWith("USDT") ? `${value.slice(0, -4)}/USDT` : value;
-
-function PillButton({ active, onClick, children, title }: { active: boolean; onClick: () => void; children: React.ReactNode; title?: string }) {
-  return <button type="button" title={title} onClick={onClick} className={`h-8 shrink-0 rounded-md px-2.5 text-xs font-medium transition ${active ? "bg-white/[0.11] text-white ring-1 ring-white/[0.13]" : "text-white/45 hover:bg-white/[0.045] hover:text-white/80"}`}>{children}</button>;
+export default function SearchControls({symbol,timeframe,patternLength,topK,loading,liveQuote,onSymbolChange,onTimeframeChange,onPatternLengthChange,onTopKChange}:SearchControlsProps){
+ const [marketQuery,setMarketQuery]=useState(""); const [marketFocused,setMarketFocused]=useState(false); const [instruments,setInstruments]=useState<Instrument[]>([]); const [marketLoading,setMarketLoading]=useState(false);
+ const [favoriteSymbols,setFavoriteSymbols]=useState<string[]>([]); const [recentSymbols,setRecentSymbols]=useState<string[]>([]); const [highlightedIndex,setHighlightedIndex]=useState(0); const [quoteFilter,setQuoteFilter]=useState("ALL"); const [statusFilter,setStatusFilter]=useState("TRADING");
+ const searchRef=useRef<HTMLInputElement>(null); const requestRef=useRef<AbortController|null>(null);
+ useEffect(()=>{if(!marketFocused)return;setFavoriteSymbols(readSymbols(FAVORITES_KEY));setRecentSymbols(readSymbols(RECENTS_KEY))},[marketFocused]);
+ useEffect(()=>{if(!marketFocused&&!marketQuery)return;const timer=window.setTimeout(async()=>{requestRef.current?.abort();const controller=new AbortController();requestRef.current=controller;setMarketLoading(true);try{const params=new URLSearchParams({search:marketQuery.trim(),limit:"30"});if(quoteFilter!=="ALL")params.set("quote_asset",quoteFilter);if(statusFilter!=="ALL")params.set("status",statusFilter);const response=await fetch(`/api/backend/api/v1/instruments?${params.toString()}`,{credentials:"include",signal:controller.signal,cache:"no-store"});if(!response.ok)throw new Error("Instrument search failed");const payload=await response.json();setInstruments(Array.isArray(payload.instruments)?payload.instruments:[])}catch(error){if(!(error instanceof DOMException&&error.name==="AbortError"))setInstruments([])}finally{if(!controller.signal.aborted)setMarketLoading(false)}},marketQuery?120:0);return()=>window.clearTimeout(timer)},[marketFocused,marketQuery,quoteFilter,statusFilter]);
+ useEffect(()=>()=>requestRef.current?.abort(),[]);
+ const ranked=useMemo(()=>[...instruments].sort((a,b)=>scoreInstrument(a,marketQuery)-scoreInstrument(b,marketQuery)),[instruments,marketQuery]); const rankedItems=ranked.slice(0,12);
+ const selectSymbol=(value:string)=>{onSymbolChange(value);const next=[value,...recentSymbols.filter(x=>x!==value)].slice(0,8);saveSymbols(RECENTS_KEY,next);setRecentSymbols(next);setMarketQuery("");setMarketFocused(false);searchRef.current?.blur()};
+ const toggleFavorite=(value:string)=>{const next=favoriteSymbols.includes(value)?favoriteSymbols.filter(x=>x!==value):[value,...favoriteSymbols].slice(0,20);saveSymbols(FAVORITES_KEY,next);setFavoriteSymbols(next)};
+ useEffect(()=>{const handleKeyDown=(event:KeyboardEvent)=>{if((event.key==="/"||(event.ctrlKey&&event.key.toLowerCase()==="k"))&&!marketFocused){const target=event.target as HTMLElement|null;if(target?.tagName==="INPUT"||target?.tagName==="TEXTAREA"||target?.tagName==="SELECT")return;event.preventDefault();searchRef.current?.focus();return}if(!marketFocused)return;if(event.key==="Escape"){event.preventDefault();setMarketFocused(false);searchRef.current?.blur();return}if(event.key==="ArrowDown"){event.preventDefault();setHighlightedIndex(v=>Math.min(v+1,Math.max(0,rankedItems.length-1)));return}if(event.key==="ArrowUp"){event.preventDefault();setHighlightedIndex(v=>Math.max(0,v-1));return}if(event.key==="Enter"){event.preventDefault();const item=rankedItems[highlightedIndex];if(item)selectSymbol(item.symbol)}};window.addEventListener("keydown",handleKeyDown);return()=>window.removeEventListener("keydown",handleKeyDown)},[marketFocused,highlightedIndex,rankedItems]);
+ const favoriteItems=favoriteSymbols.map(x=>instruments.find(i=>i.symbol===x)).filter((x):x is Instrument=>Boolean(x)); const recentItems=recentSymbols.map(x=>instruments.find(i=>i.symbol===x)).filter((x):x is Instrument=>Boolean(x)); const currentLabel=symbol.includes("/")?symbol:symbol.endsWith("USDT")?`${symbol.slice(0,-4)}/USDT`:symbol;
+ return <section className="relative z-30 border-b border-white/[0.07] bg-[#080b10] px-3 py-2 sm:px-4"><div className="flex w-full min-w-0 items-center gap-2">
+  <div className={`relative min-w-0 flex-1 sm:flex-none ${marketFocused?"sm:w-[320px]":"sm:w-[220px]"}`}><div className={`flex h-9 w-full items-center gap-2 rounded-lg border bg-[#0b0f15] px-2.5 transition ${marketFocused?"border-white/20 ring-1 ring-white/[0.05]":"border-white/[0.09] hover:border-white/[0.15]"}`}><Search size={14} className="shrink-0 text-white/35"/><input ref={searchRef} value={marketQuery} onChange={e=>{setMarketQuery(e.target.value);setHighlightedIndex(0)}} onFocus={()=>setMarketFocused(true)} placeholder={`${currentLabel} · Search Binance markets…`} className="min-w-0 flex-1 bg-transparent text-xs font-medium text-white outline-none placeholder:text-white/28" aria-label="Search Binance markets" autoComplete="off"/>{marketQuery?<button type="button" onClick={()=>{setMarketQuery("");searchRef.current?.focus()}} className="text-white/30 hover:text-white/70" aria-label="Clear market search"><X size={13}/></button>:<kbd className="hidden rounded border border-white/10 px-1.5 py-0.5 text-[9px] text-white/22 lg:block">/</kbd>}</div>
+   {marketFocused&&<><button type="button" aria-label="Close market suggestions" className="fixed inset-0 -z-10 cursor-default" onClick={()=>setMarketFocused(false)}/><div className="absolute left-0 top-[calc(100%+7px)] w-[min(430px,calc(100vw-24px))] overflow-hidden rounded-xl border border-white/[0.12] bg-[#0b0f15] p-1.5 shadow-2xl shadow-black/50"><div className="flex items-center justify-between px-2 py-1.5"><span className="text-[9px] font-semibold uppercase tracking-[0.12em] text-white/25">Binance Spot Markets</span>{marketLoading&&<span className="text-[9px] text-white/25">Searching…</span>}</div>
+    <div className="mb-1 flex gap-1 px-1.5"><select value={quoteFilter} onChange={e=>{setQuoteFilter(e.target.value);setHighlightedIndex(0)}} className="h-7 flex-1 rounded-md border border-white/[0.08] bg-[#080c12] px-2 text-[9px] font-medium text-white/55 outline-none" aria-label="Quote asset filter">{QUOTES.map(v=><option key={v} value={v}>{v==="ALL"?"Quote: All":`Quote: ${v}`}</option>)}</select><select value={statusFilter} onChange={e=>{setStatusFilter(e.target.value);setHighlightedIndex(0)}} className="h-7 flex-1 rounded-md border border-white/[0.08] bg-[#080c12] px-2 text-[9px] font-medium text-white/55 outline-none" aria-label="Market status filter">{STATUSES.map(v=><option key={v} value={v}>{v==="ALL"?"Status: All":`Status: ${v}`}</option>)}</select></div>
+    {marketQuery.trim()===""&&favoriteItems.length>0&&<div className="mb-1 border-b border-white/[0.06] pb-1"><div className="px-2 py-1 text-[9px] font-semibold uppercase tracking-[0.1em] text-amber-200/45">Favorites</div>{favoriteItems.slice(0,4).map(item=><MarketRow key={`favorite-${item.symbol}`} item={item} active={item.symbol===symbol} highlighted={false} favorite onSelect={selectSymbol} onToggleFavorite={toggleFavorite} timeframe={timeframe}/>)}</div>}
+    {marketQuery.trim()===""&&recentItems.length>0&&<div className="mb-1 border-b border-white/[0.06] pb-1"><div className="px-2 py-1 text-[9px] font-semibold uppercase tracking-[0.1em] text-white/25">Recent</div>{recentItems.slice(0,4).map(item=><MarketRow key={`recent-${item.symbol}`} item={item} active={item.symbol===symbol} highlighted={false} favorite={favoriteSymbols.includes(item.symbol)} onSelect={selectSymbol} onToggleFavorite={toggleFavorite} timeframe={timeframe}/>)}</div>}
+    {rankedItems.length?rankedItems.map((item,index)=><MarketRow key={item.symbol} item={item} active={item.symbol===symbol} highlighted={index===highlightedIndex} favorite={favoriteSymbols.includes(item.symbol)} onSelect={selectSymbol} onToggleFavorite={toggleFavorite} timeframe={timeframe}/>):<div className="px-2.5 py-4 text-xs text-white/35">{marketLoading?"Finding markets…":marketQuery?"No matching Binance market.":"No markets match the selected filters."}</div>}
+    <div className="border-t border-white/[0.06] px-2.5 py-2 text-[9px] leading-4 text-white/25">↑↓ navigate · Enter select · Esc close · Favorite and recent markets are saved locally.</div></div></>}
+  </div>
+  <div className="flex h-9 shrink-0 items-center gap-2 rounded-lg border border-white/[0.08] bg-[#0b0f15] px-2.5"><span className="h-1.5 w-1.5 rounded-full bg-emerald-400"/><span className="max-w-[100px] truncate text-[9px] font-semibold uppercase tracking-[0.05em] text-white/45">{currentLabel}</span><span className="font-mono text-xs font-semibold tabular-nums text-white/90">{liveQuote?formatPrice(liveQuote.price):"—"}</span>{liveQuote&&<span className={`font-mono text-[10px] tabular-nums ${liveQuote.change>=0?"text-emerald-400":"text-rose-400"}`}>{liveQuote.change>=0?"+":""}{liveQuote.change.toFixed(2)}%</span>}</div>
+  <div className="hidden h-6 w-px shrink-0 bg-white/[0.08] sm:block"/><div className="flex h-9 shrink-0 items-center rounded-lg border border-white/[0.08] bg-[#0b0f15] p-0.5" aria-label="Timeframe">{TIMEFRAMES.map(item=><PillButton key={item.value} active={timeframe===item.value} onClick={()=>onTimeframeChange(item.value)} title={item.detail}>{item.label}</PillButton>)}</div>
+  <div className="hidden h-9 shrink-0 items-center gap-0.5 rounded-lg border border-white/[0.08] bg-[#0b0f15] p-0.5 md:flex" aria-label="Pattern length">{PATTERN_LENGTHS.map(value=><PillButton key={value} active={patternLength===value} onClick={()=>onPatternLengthChange(value)} title={`${value} candles`}>{value}</PillButton>)}<span className="px-1.5 text-[9px] uppercase tracking-[0.1em] text-white/25">candles</span></div>
+  <div className="hidden h-9 shrink-0 items-center gap-0.5 rounded-lg border border-white/[0.08] bg-[#0b0f15] p-0.5 lg:flex" aria-label="Historical matches"><span className="px-2 text-[9px] font-semibold uppercase tracking-[0.1em] text-white/30">Matches</span>{MATCH_COUNTS.map(value=><PillButton key={value} active={topK===value} onClick={()=>onTopKChange(value)} title={`Show ${value} historical matches`}>{value}</PillButton>)}</div>
+  <div className="ml-auto hidden text-[10px] font-medium text-white/25 xl:block">{loading?<span className="flex items-center gap-1.5 text-amber-300/70"><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-amber-300"/>Updating</span>:""}</div><div className="flex h-9 shrink-0 items-center rounded-lg border border-white/[0.08] bg-[#0b0f15] px-2 md:hidden" title="Pattern settings"><SlidersHorizontal size={13} className="text-white/35"/></div>
+ </div></section>;
 }
 
-function scoreInstrument(item: Instrument, query: string) {
-  const q = query.trim().toLowerCase();
-  if (!q) return 10;
-  const symbol = item.symbol.toLowerCase();
-  const base = item.base_asset.toLowerCase();
-  const quote = item.quote_asset.toLowerCase();
-  if (symbol === q || base === q) return 0;
-  if (symbol.startsWith(q) || base.startsWith(q)) return 1;
-  if (symbol.includes(q) || base.includes(q)) return 2;
-  if (quote === q || quote.startsWith(q)) return 3;
-  return 99;
-}
-
-export default function SearchControls({ symbol, timeframe, patternLength, topK, loading, liveQuote, onSymbolChange, onTimeframeChange, onPatternLengthChange, onTopKChange }: SearchControlsProps) {
-  const [marketQuery, setMarketQuery] = useState("");
-  const [marketFocused, setMarketFocused] = useState(false);
-  const [instruments, setInstruments] = useState<Instrument[]>([]);
-  const [marketLoading, setMarketLoading] = useState(false);
-  const searchRef = useRef<HTMLInputElement>(null);
-  const requestRef = useRef<AbortController | null>(null);
-
-  useEffect(() => {
-    if (!marketFocused && !marketQuery) return;
-    const timer = window.setTimeout(async () => {
-      requestRef.current?.abort();
-      const controller = new AbortController();
-      requestRef.current = controller;
-      setMarketLoading(true);
-      try {
-        const response = await fetch(`/api/backend/api/v1/instruments?search=${encodeURIComponent(marketQuery.trim())}&limit=30`, { credentials: "include", signal: controller.signal, cache: "no-store" });
-        if (!response.ok) throw new Error("Instrument search failed");
-        const payload = await response.json();
-        setInstruments(Array.isArray(payload.instruments) ? payload.instruments : []);
-      } catch (error) {
-        if (!(error instanceof DOMException && error.name === "AbortError")) setInstruments([]);
-      } finally {
-        if (!controller.signal.aborted) setMarketLoading(false);
-      }
-    }, marketQuery ? 120 : 0);
-    return () => window.clearTimeout(timer);
-  }, [marketFocused, marketQuery]);
-
-  useEffect(() => () => requestRef.current?.abort(), []);
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if ((event.key === "/" || (event.ctrlKey && event.key.toLowerCase() === "k")) && !marketFocused) {
-        const target = event.target as HTMLElement | null;
-        if (target?.tagName === "INPUT" || target?.tagName === "TEXTAREA" || target?.tagName === "SELECT") return;
-        event.preventDefault(); searchRef.current?.focus();
-      }
-      if (event.key === "Escape") { setMarketFocused(false); searchRef.current?.blur(); }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [marketFocused]);
-
-  const ranked = [...instruments].sort((a, b) => scoreInstrument(a, marketQuery) - scoreInstrument(b, marketQuery));
-  const best = ranked[0];
-  const selectSymbol = (value: string) => { onSymbolChange(value); setMarketQuery(""); setMarketFocused(false); searchRef.current?.blur(); };
-
-  return <section className="relative z-30 border-b border-white/[0.07] bg-[#080b10] px-3 py-2 sm:px-4">
-    <div className="flex w-full min-w-0 items-center gap-2">
-      <div className={`relative min-w-0 flex-1 sm:flex-none ${marketFocused ? "sm:w-[260px]" : "sm:w-[220px]"}`}>
-        <div className={`flex h-9 w-full items-center gap-2 rounded-lg border bg-[#0b0f15] px-2.5 transition ${marketFocused ? "border-white/20 ring-1 ring-white/[0.05]" : "border-white/[0.09] hover:border-white/[0.15]"}`}>
-          <Search size={14} className="shrink-0 text-white/35" />
-          <input ref={searchRef} value={marketQuery} onChange={(event) => setMarketQuery(event.target.value)} onFocus={() => setMarketFocused(true)} onKeyDown={(event) => { if (event.key === "Enter" && best) selectSymbol(best.symbol); }} placeholder="Search Binance markets…" className="min-w-0 flex-1 bg-transparent text-xs font-medium text-white outline-none placeholder:text-white/28" aria-label="Search Binance markets" autoComplete="off" />
-          {marketQuery ? <button type="button" onClick={() => { setMarketQuery(""); searchRef.current?.focus(); }} className="text-white/30 hover:text-white/70" aria-label="Clear market search"><X size={13} /></button> : <kbd className="hidden rounded border border-white/10 px-1.5 py-0.5 text-[9px] text-white/22 lg:block">/</kbd>}
-        </div>
-        {marketFocused && <><button type="button" aria-label="Close market suggestions" className="fixed inset-0 -z-10 cursor-default" onClick={() => setMarketFocused(false)} /><div className="absolute left-0 top-[calc(100%+7px)] w-[min(390px,calc(100vw-24px))] overflow-hidden rounded-xl border border-white/[0.12] bg-[#0b0f15] p-1.5 shadow-2xl shadow-black/50">
-          <div className="flex items-center justify-between px-2 py-1.5"><span className="text-[9px] font-semibold uppercase tracking-[0.12em] text-white/25">Binance Spot Markets</span>{marketLoading && <span className="text-[9px] text-white/25">Searching…</span>}</div>
-          {ranked.length ? ranked.slice(0, 12).map((item, index) => {
-            const coverage = item.coverage?.[timeframe];
-            return <button key={item.symbol} type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => selectSymbol(item.symbol)} className="flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-left transition hover:bg-white/[0.055]">
-              <span className="min-w-0"><span className="font-semibold text-white">{item.base_asset}</span><span className="ml-2 text-xs text-white/40">/ {item.quote_asset}</span>{index === 0 && marketQuery.trim() && <span className="ml-2 text-[9px] text-emerald-400/70">Best match</span>}</span>
-              <span className="flex shrink-0 items-center gap-2"><span className={`text-[9px] ${coverage ? "text-emerald-400/70" : "text-white/25"}`}>{coverage ? `${formatCoverage(coverage.candle_count)} ${timeframe}` : "No history"}</span>{item.symbol === symbol && <Check size={14} className="shrink-0 text-emerald-400" />}</span>
-            </button>;
-          }) : <div className="px-2.5 py-4 text-xs text-white/35">{marketLoading ? "Finding markets…" : marketQuery ? "No matching Binance market." : "Type a symbol or coin name to search."}</div>}
-          <div className="border-t border-white/[0.06] px-2.5 py-2 text-[9px] leading-4 text-white/25">Historical search requires candles for the selected timeframe. Coverage is shown per market.</div>
-        </div></>}
-      </div>
-      <div className="flex h-9 shrink-0 items-center gap-2 rounded-lg border border-white/[0.08] bg-[#0b0f15] px-2.5">
-        <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
-        <span className="text-[10px] font-semibold text-white/55">{formatSymbol(symbol)}</span>
-        <span className="font-mono text-xs font-semibold tabular-nums text-white/90">{liveQuote ? formatPrice(liveQuote.price) : "—"}</span>
-        {liveQuote && <span className={`font-mono text-[10px] tabular-nums ${liveQuote.change >= 0 ? "text-emerald-400" : "text-rose-400"}`}>{liveQuote.change >= 0 ? "+" : ""}{liveQuote.change.toFixed(2)}%</span>}
-      </div>
-      <div className="hidden h-6 w-px shrink-0 bg-white/[0.08] sm:block" />
-      <div className="flex h-9 shrink-0 items-center rounded-lg border border-white/[0.08] bg-[#0b0f15] p-0.5" aria-label="Timeframe">{TIMEFRAMES.map((item) => <PillButton key={item.value} active={timeframe === item.value} onClick={() => onTimeframeChange(item.value)} title={item.detail}>{item.label}</PillButton>)}</div>
-      <div className="hidden h-9 shrink-0 items-center gap-0.5 rounded-lg border border-white/[0.08] bg-[#0b0f15] p-0.5 md:flex" aria-label="Pattern length">{PATTERN_LENGTHS.map((value) => <PillButton key={value} active={patternLength === value} onClick={() => onPatternLengthChange(value)} title={`${value} candles`}>{value}</PillButton>)}<span className="px-1.5 text-[9px] uppercase tracking-[0.1em] text-white/25">candles</span></div>
-      <div className="hidden h-9 shrink-0 items-center gap-0.5 rounded-lg border border-white/[0.08] bg-[#0b0f15] p-0.5 lg:flex" aria-label="Historical matches"><span className="px-2 text-[9px] font-semibold uppercase tracking-[0.1em] text-white/30">Matches</span>{MATCH_COUNTS.map((value) => <PillButton key={value} active={topK === value} onClick={() => onTopKChange(value)} title={`Show ${value} historical matches`}>{value}</PillButton>)}</div>
-      <div className="ml-auto hidden text-[10px] font-medium text-white/25 xl:block">{loading ? <span className="flex items-center gap-1.5 text-amber-300/70"><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-amber-300" />Updating</span> : ""}</div>
-      <div className="flex h-9 shrink-0 items-center rounded-lg border border-white/[0.08] bg-[#0b0f15] px-2 md:hidden" title="Pattern settings"><SlidersHorizontal size={13} className="text-white/35" /></div>
-    </div>
-  </section>;
-}
+function MarketRow({item,active,highlighted,favorite,onSelect,onToggleFavorite,timeframe}:{item:Instrument;active:boolean;highlighted:boolean;favorite:boolean;onSelect:(value:string)=>void;onToggleFavorite:(value:string)=>void;timeframe:string}){const coverage=item.coverage?.[timeframe];return <div className={`flex w-full items-center rounded-lg px-2 py-1.5 text-left transition ${highlighted?"bg-white/[0.055]":"hover:bg-white/[0.035]"}`}><button type="button" onMouseDown={e=>e.preventDefault()} onClick={()=>onSelect(item.symbol)} className="min-w-0 flex-1 text-left"><span className="font-semibold text-white">{item.base_asset}</span><span className="ml-2 text-xs text-white/40">/ {item.quote_asset}</span>{active&&<span className="ml-2 text-[9px] text-emerald-400/70">Selected</span>}<span className={`ml-2 text-[9px] ${coverage?"text-emerald-400/70":"text-white/25"}`}>{coverage?`${formatCoverage(coverage.candle_count)} ${timeframe}`:"No history"}</span></button><button type="button" aria-label={`${favorite?"Remove":"Add"} ${item.symbol} favorite`} onMouseDown={e=>e.preventDefault()} onClick={()=>onToggleFavorite(item.symbol)} className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-white/25 hover:bg-white/[0.06] hover:text-amber-200/80" title={favorite?"Remove favorite":"Add favorite"}>{favorite?<Star size={13} fill="currentColor"/>:<Star size={13}/>}</button>{active&&<Check size={14} className="ml-1 shrink-0 text-emerald-400"/>}</div>}
