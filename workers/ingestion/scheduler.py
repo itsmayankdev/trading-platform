@@ -57,7 +57,7 @@ class IngestionScheduler:
         }
         eligible_symbols = self._eligible_symbols()
 
-        plans: list[tuple[int, IngestionPlan]] = []
+        plans: list[tuple[int, float, IngestionPlan]] = []
         assigned_symbols: set[str] = set()
 
         for tier in sorted(self.tiers, key=lambda item: item.priority):
@@ -86,10 +86,23 @@ class IngestionScheduler:
                 plan for plan in planner.build_plans()
                 if plan.symbol in symbols
             ]
-            plans.extend((tier.priority, plan) for plan in tier_plans)
+            plans.extend(
+                (tier.priority, ticker_map.get(plan.symbol, 0.0), plan)
+                for plan in tier_plans
+            )
 
-        plans.sort(key=lambda item: (item[0], item[1].symbol, item[1].timeframe, item[1].reason))
-        selected = [plan for _, plan in plans[: self.max_new_jobs]]
+        # Keep tier priority first, then use current 24h quote volume so the
+        # bounded worker budget goes to the most useful markets first.
+        plans.sort(
+            key=lambda item: (
+                item[0],
+                -item[1],
+                item[2].symbol,
+                item[2].timeframe,
+                item[2].reason,
+            )
+        )
+        selected = [plan for _, _, plan in plans[: self.max_new_jobs]]
         queued = IngestionPlanner(timeframes=self.timeframes, history_days=1).enqueue(selected)
 
         return {
@@ -113,8 +126,12 @@ class IngestionScheduler:
                     SELECT symbol
                     FROM instruments
                     WHERE is_enabled = TRUE
+                      AND is_listed = TRUE
+                      AND is_spot_trading_allowed = TRUE
+                      AND exchange_status = 'TRADING'
                       AND exchange = 'binance'
                       AND provider = 'binance'
+                      AND quote_asset = 'USDT'
                     """
                 )
             ).scalars().all()
