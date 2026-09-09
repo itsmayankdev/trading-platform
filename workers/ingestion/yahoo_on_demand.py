@@ -83,13 +83,14 @@ def _release(symbol: str, timeframe: str) -> None:
             _running.pop((symbol, timeframe), None)
 
 
-def _submit_background(symbol: str) -> None:
-    for timeframe in _TIMEFRAMES:
-        key = (symbol, timeframe)
-        with _lock:
-            current = _running.get(key)
-            if current is not None and not current.done():
-                continue
+def _submit_background(symbol: str, timeframe: str) -> None:
+    # Only the actively requested timeframe gets a background full-history job.
+    # Other Yahoo timeframes are loaded when the user actually requests them;
+    # this keeps the foreground path free from six-way network/DB contention.
+    key = (symbol, timeframe)
+    with _lock:
+        current = _running.get(key)
+        if current is None or current.done():
             _running[key] = _executor.submit(_release, symbol, timeframe)
 
 
@@ -112,7 +113,7 @@ def ensure_yahoo_market_data(symbol: str, timeframe: str, minimum_candles: int) 
                 min_time, max_time, count = _coverage(symbol, timeframe)
 
     # Full history is never part of the foreground request.
-    _submit_background(symbol)
+    _submit_background(symbol, timeframe)
     return {
         "symbol": symbol,
         "timeframe": timeframe,
