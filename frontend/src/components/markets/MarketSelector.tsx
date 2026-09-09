@@ -18,6 +18,28 @@ function compactVolume(value: number | null | undefined) {
   return `$${value.toFixed(0)}`;
 }
 
+function rankAndDeduplicate(items: Instrument[], query: string) {
+  const normalizedQuery = normalizeMarketSymbol(query);
+  const ranked = [...items].sort((a, b) => {
+    const aExact = normalizeMarketSymbol(a.symbol) === normalizedQuery ? 1 : 0;
+    const bExact = normalizeMarketSymbol(b.symbol) === normalizedQuery ? 1 : 0;
+    if (aExact !== bExact) return bExact - aExact;
+    const aBase = normalizeMarketSymbol(a.base_asset || "");
+    const bBase = normalizeMarketSymbol(b.base_asset || "");
+    const aBaseExact = aBase === normalizedQuery ? 1 : 0;
+    const bBaseExact = bBase === normalizedQuery ? 1 : 0;
+    if (aBaseExact !== bBaseExact) return bBaseExact - aBaseExact;
+    return (b.quote_volume_24h ?? 0) - (a.quote_volume_24h ?? 0);
+  });
+  const seen = new Set<string>();
+  return ranked.filter((item) => {
+    const key = normalizeMarketSymbol(item.base_asset || item.symbol);
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).slice(0, 12);
+}
+
 export default function MarketSelector({ value, onChange, className = "" }: MarketSelectorProps) {
   const [query, setQuery] = useState(value);
   const [results, setResults] = useState<Instrument[]>(() => resultCache.get(`q:${value.toUpperCase()}`)?.items ?? []);
@@ -35,18 +57,19 @@ export default function MarketSelector({ value, onChange, className = "" }: Mark
       return () => controller.abort();
     }
     const timer = window.setTimeout(async () => {
-      const params = new URLSearchParams({ search, limit: "12", status: "TRADING", sort: "volume" });
+      const params = new URLSearchParams({ search, limit: "30", status: "TRADING", sort: "volume" });
       try {
         const response = await fetch(`/api/backend/api/v1/instruments?${params.toString()}`, { cache: "no-store", signal: controller.signal });
         if (!response.ok) return;
         const payload = await response.json();
-        const items = Array.isArray(payload?.instruments) ? payload.instruments as Instrument[] : [];
+        const raw = Array.isArray(payload?.instruments) ? payload.instruments as Instrument[] : [];
+        const items = rankAndDeduplicate(raw, search);
         resultCache.set(key, { at: Date.now(), items });
         setResults(items);
       } catch {
         if (!controller.signal.aborted) setResults([]);
       }
-    }, 80);
+    }, 60);
     return () => { window.clearTimeout(timer); controller.abort(); };
   }, [query, browseMode]);
 
@@ -62,7 +85,7 @@ export default function MarketSelector({ value, onChange, className = "" }: Mark
   return <div className={`relative ${className}`}>
     <div className="flex h-8 items-center rounded border border-white/10 bg-[#0d1219] px-2 focus-within:border-amber-200/30">
       <Search size={11} className="mr-1.5 shrink-0 text-white/25" />
-      <input value={query} onChange={(event) => { setQuery(event.target.value.toUpperCase()); setBrowseMode(false); setOpen(true); }} onFocus={() => { setBrowseMode(true); setOpen(true); }} onKeyDown={(event) => { if (event.key === "Enter") { const exact = results.find((item) => item.symbol === normalizeMarketSymbol(query)); choose(exact?.symbol || results[0]?.symbol || query); } if (event.key === "Escape") setOpen(false); }} placeholder="Search Binance Spot market" aria-label="Search Binance Spot market" className="w-full bg-transparent text-[11px] text-white/80 outline-none placeholder:text-white/20" />
+      <input value={query} onChange={(event) => { setQuery(event.target.value.toUpperCase()); setBrowseMode(false); setOpen(true); }} onFocus={() => { setBrowseMode(true); setOpen(true); }} onKeyDown={(event) => { if (event.key === "Enter") { const exact = results.find((item) => normalizeMarketSymbol(item.symbol) === normalizeMarketSymbol(query)); choose(exact?.symbol || results[0]?.symbol || query); } if (event.key === "Escape") setOpen(false); }} placeholder="Search Binance Spot market" aria-label="Search Binance Spot market" className="w-full bg-transparent text-[11px] text-white/80 outline-none placeholder:text-white/20" />
     </div>
     {open && results.length > 0 && <div className="absolute left-0 top-9 z-50 max-h-72 w-[300px] overflow-auto rounded-md border border-white/10 bg-[#0b1017] p-1 shadow-2xl">
       {results.map((item) => <button key={item.symbol} type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => choose(item.symbol)} className="flex w-full items-center justify-between rounded px-2.5 py-2 text-left hover:bg-white/[.05]">
