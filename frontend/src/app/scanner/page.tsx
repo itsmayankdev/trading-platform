@@ -25,7 +25,7 @@ export default function ScannerPage() {
     let alive = true;
     async function loadUniverse() {
       try {
-        const response = await fetch("/api/backend/api/v1/instruments?sort=volume&limit=10&quote_asset=USDT", { credentials: "include", cache: "no-store" });
+        const response = await fetch("/api/backend/api/v1/instruments?sort=volume&limit=10", { credentials: "include", cache: "no-store" });
         const payload = response.ok ? await response.json() : null;
         const volume: VolumeMarket[] = Array.isArray(payload?.instruments) ? payload.instruments : [];
         if (!alive) return;
