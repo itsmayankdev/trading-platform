@@ -9,10 +9,8 @@ class SimilarityV3:
     """Strict structural OHLCV matcher used by production pattern search."""
 
     version = "similarity_v3"
-    feature_version = "ohlcv_structure_v1"
+    feature_version = "ohlcv_structure_v2"
 
-    # Candle geometry is the strongest visual/structural signal. Close path and
-    # returns retain trend/trajectory information; volume is deliberately lighter.
     WEIGHTS = {"close_path": 0.30, "returns": 0.20, "candle": 0.40, "volume": 0.10}
     SCALES = {"close_path": 0.08, "returns": 0.025, "candle": 0.08, "volume": 2.0}
 
@@ -76,8 +74,6 @@ class SimilarityV3:
             self.WEIGHTS[name] * np.log(max(similarities[name], 1e-12))
             for name in self.WEIGHTS
         )
-        # A structural gate prevents a very strong close path from producing a
-        # misleadingly high overall match when candle geometry is poor.
         structural_cap = 0.45 + 0.55 * similarities["candle"]
         return float(np.clip(min(np.exp(weighted_log), structural_cap), 0.0, 1.0))
 
