@@ -4,7 +4,8 @@ import { useEffect, useState } from "react";
 import { Activity, BarChart3, Bell, ChevronLeft, ChevronRight, FlaskConical, Globe2, LayoutDashboard, ScanSearch, ShieldCheck, Star, UserRound } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { writeGlobalMarket } from "@/lib/marketContext";
+import MarketSelector from "@/components/markets/MarketSelector";
+import { MARKET_CONTEXT_EVENT, readGlobalMarket, writeGlobalMarket } from "@/lib/marketContext";
 
 type WatchlistItem = { symbol: string; name: string };
 type InstrumentRow = { symbol: string; base_asset?: string | null };
@@ -26,6 +27,21 @@ export default function Sidebar({ symbol, collapsed, onCollapsedChange, onSymbol
   const [owner, setOwner] = useState(false);
   const [permissions, setPermissions] = useState<string[]>([]);
   const [watchlistItems, setWatchlistItems] = useState<WatchlistItem[]>([]);
+  const [globalSymbol, setGlobalSymbol] = useState(() => readGlobalMarket(symbol).symbol);
+
+  useEffect(() => {
+    const sync = (event?: Event) => {
+      const next = event instanceof CustomEvent ? String((event.detail as { symbol?: string })?.symbol || "") : readGlobalMarket(symbol).symbol;
+      if (next && next !== symbol) onSymbolSelect(next);
+      if (next) setGlobalSymbol(next);
+    };
+    window.addEventListener(MARKET_CONTEXT_EVENT, sync);
+    window.addEventListener("storage", sync);
+    const initial = readGlobalMarket(symbol).symbol;
+    setGlobalSymbol(initial);
+    if (initial && initial !== symbol) onSymbolSelect(initial);
+    return () => { window.removeEventListener(MARKET_CONTEXT_EVENT, sync); window.removeEventListener("storage", sync); };
+  }, [onSymbolSelect, symbol]);
 
   useEffect(() => {
     let alive = true;
@@ -44,47 +60,36 @@ export default function Sidebar({ symbol, collapsed, onCollapsedChange, onSymbol
 
   useEffect(() => {
     let alive = true;
-    const symbols = selectedSymbols.filter(Boolean).join(",");
-    if (!symbols) { setWatchlistItems([]); return () => { alive = false; }; }
-    const params = new URLSearchParams({ symbols, limit: String(Math.min(selectedSymbols.length, 20)) });
-    fetch(`/api/backend/api/v1/instruments?${params.toString()}`, { credentials: "include", cache: "no-store" })
-      .then((response) => response.ok ? response.json() : null)
-      .then((payload) => {
-        if (!alive) return;
-        const rows: InstrumentRow[] = Array.isArray(payload?.instruments) ? payload.instruments : [];
-        setWatchlistItems(rows.map((row) => ({ symbol: row.symbol, name: row.base_asset || row.symbol })));
-      }).catch(() => { if (alive) setWatchlistItems([]); });
-    return () => { alive = false; };
-  }, [selectedSymbols]);
+    const refresh = () => {
+      let stored: string[] = [];
+      try { const raw = JSON.parse(localStorage.getItem("market-memory-watchlist") || "[]"); if (Array.isArray(raw)) stored = raw.filter((item): item is string => typeof item === "string"); } catch { stored = []; }
+      const merged = Array.from(new Set([...stored, ...selectedSymbols, globalSymbol].filter(Boolean))).slice(0, 20);
+      const symbols = merged.join(",");
+      if (!symbols) { setWatchlistItems([]); return; }
+      const params = new URLSearchParams({ symbols, limit: String(merged.length) });
+      fetch(`/api/backend/api/v1/instruments?${params.toString()}`, { credentials: "include", cache: "no-store" })
+        .then((response) => response.ok ? response.json() : null)
+        .then((payload) => { if (!alive) return; const rows: InstrumentRow[] = Array.isArray(payload?.instruments) ? payload.instruments : []; setWatchlistItems(rows.map((row) => ({ symbol: row.symbol, name: row.base_asset || row.symbol }))); })
+        .catch(() => { if (alive) setWatchlistItems([]); });
+    };
+    refresh();
+    window.addEventListener("storage", refresh);
+    window.addEventListener(MARKET_CONTEXT_EVENT, refresh);
+    return () => { alive = false; window.removeEventListener("storage", refresh); window.removeEventListener(MARKET_CONTEXT_EVENT, refresh); };
+  }, [selectedSymbols, globalSymbol]);
 
   const allowed = (permission: string) => permissions.includes(permission) || permissions.includes(permission.replace(".use", ".view"));
-  const selectMarket = (nextSymbol: string) => { writeGlobalMarket(nextSymbol); onSymbolSelect(nextSymbol); };
+  const selectMarket = (nextSymbol: string) => { writeGlobalMarket(nextSymbol); setGlobalSymbol(nextSymbol); onSymbolSelect(nextSymbol); };
   const itemClass = (href: string) => `flex items-center gap-2 rounded-md px-2.5 py-2 text-[10px] font-medium transition ${pathname.startsWith(href) ? "bg-white/[0.06] text-white/85" : "text-white/45 hover:bg-white/[0.03] hover:text-white/70"} ${collapsed ? "justify-center px-0" : ""}`;
 
   return <aside className={`${collapsed ? "w-[52px]" : "w-[188px]"} hidden shrink-0 border-r border-white/7 bg-[#090d13] transition-[width] duration-200 lg:block`}>
     <div className="sticky top-12 flex h-[calc(100vh-48px)] flex-col">
-      <div className="flex h-10 items-center border-b border-white/7 px-2">
-        {!collapsed && <span className="px-2 text-[9px] font-semibold uppercase tracking-[0.15em] text-white/25">Workspace</span>}
-        <button type="button" aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"} onClick={() => onCollapsedChange(!collapsed)} className="ml-auto flex h-7 w-7 items-center justify-center rounded-md border border-white/8 text-white/35 hover:bg-white/5 hover:text-white/75">{collapsed ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}</button>
-      </div>
-      <nav className="space-y-0.5 px-2 py-2" aria-label="Research workspace">
-        {MENU.filter((item) => allowed(item.permission)).map((item) => { const active = item.href === "/" ? pathname === "/" : pathname.startsWith(item.href); const Icon = item.icon; return <Link key={item.href} href={item.href} className={`flex items-center gap-2 rounded-md px-2.5 py-2 text-[10px] font-medium transition ${active ? "bg-white/[0.06] text-white/85" : "text-white/45 hover:bg-white/[0.03] hover:text-white/70"} ${collapsed ? "justify-center px-0" : ""}`} title={collapsed ? item.label : undefined}><Icon size={14} className={active ? "text-amber-200/80" : "text-white/35"} />{!collapsed && <span>{item.label}</span>}</Link>; })}
-      </nav>
-      <div className="space-y-0.5 px-2">
-        {allowed("favorites.view") && <Link href="/favorites" className={itemClass("/favorites")} title={collapsed ? "Favorites" : undefined}><Star size={14} className={pathname.startsWith("/favorites") ? "text-amber-200/80" : "text-white/35"} fill={pathname.startsWith("/favorites") ? "currentColor" : "none"} />{!collapsed && <span>Favorites</span>}</Link>}
-        <Link href="/settings" className={itemClass("/settings")} title={collapsed ? "Account settings" : undefined}><UserRound size={14} className={pathname.startsWith("/settings") ? "text-amber-200/80" : "text-white/35"} />{!collapsed && <span>Account settings</span>}</Link>
-      </div>
+      <div className="flex h-10 items-center border-b border-white/7 px-2">{!collapsed && <span className="px-2 text-[9px] font-semibold uppercase tracking-[0.15em] text-white/25">Workspace</span>}<button type="button" aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"} onClick={() => onCollapsedChange(!collapsed)} className="ml-auto flex h-7 w-7 items-center justify-center rounded-md border border-white/8 text-white/35 hover:bg-white/5 hover:text-white/75">{collapsed ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}</button></div>
+      {!collapsed && <div className="border-b border-white/7 px-2 py-2"><div className="mb-1 px-1 text-[8px] font-semibold uppercase tracking-[.14em] text-white/20">Global market</div><MarketSelector value={globalSymbol || symbol} onChange={selectMarket} className="w-full" /></div>}
+      <nav className="space-y-0.5 px-2 py-2" aria-label="Research workspace">{MENU.filter((item) => allowed(item.permission)).map((item) => { const active = item.href === "/" ? pathname === "/" : pathname.startsWith(item.href); const Icon = item.icon; return <Link key={item.href} href={item.href} className={`flex items-center gap-2 rounded-md px-2.5 py-2 text-[10px] font-medium transition ${active ? "bg-white/[0.06] text-white/85" : "text-white/45 hover:bg-white/[0.03] hover:text-white/70"} ${collapsed ? "justify-center px-0" : ""}`} title={collapsed ? item.label : undefined}><Icon size={14} className={active ? "text-amber-200/80" : "text-white/35"} />{!collapsed && <span>{item.label}</span>}</Link>; })}</nav>
+      <div className="space-y-0.5 px-2">{allowed("favorites.view") && <Link href="/favorites" className={itemClass("/favorites")} title={collapsed ? "Favorites" : undefined}><Star size={14} className={pathname.startsWith("/favorites") ? "text-amber-200/80" : "text-white/35"} fill={pathname.startsWith("/favorites") ? "currentColor" : "none"} />{!collapsed && <span>Favorites</span>}</Link>}<Link href="/settings" className={itemClass("/settings")} title={collapsed ? "Account settings" : undefined}><UserRound size={14} className={pathname.startsWith("/settings") ? "text-amber-200/80" : "text-white/35"} />{!collapsed && <span>Account settings</span>}</Link></div>
       {owner && <div className="mt-2 border-y border-amber-300/10 px-2 py-2"><Link href="/admin" className={`flex items-center gap-2 rounded-md px-2.5 py-2 text-[10px] font-semibold transition ${pathname.startsWith("/admin") ? "bg-amber-300/10 text-amber-100" : "text-amber-200/55 hover:bg-amber-300/[.05] hover:text-amber-100"} ${collapsed ? "justify-center px-0" : ""}`} title={collapsed ? "Admin Control" : undefined}><ShieldCheck size={14} />{!collapsed && <><span>Admin Control</span><span className="ml-auto text-[7px] uppercase tracking-[.08em] text-amber-200/35">Owner</span></>}</Link></div>}
-      <div className="mt-3 px-2">
-        {!collapsed && <div className="mb-1 px-2 text-[9px] font-semibold uppercase tracking-[.14em] text-white/20">Instruments</div>}
-        <div className="space-y-0.5">
-          {watchlistItems.map((item) => { const active = item.symbol === symbol; const selected = selectedSymbols.includes(item.symbol); return <div key={item.symbol} className={`group flex items-center gap-1.5 rounded-md border px-1.5 py-2 transition ${active ? "border-white/9 bg-white/[.055]" : "border-transparent hover:bg-white/[.025]"} ${collapsed ? "justify-center" : ""}`}>
-            <button type="button" onClick={() => selectMarket(item.symbol)} className={`min-w-0 flex-1 text-left ${collapsed ? "flex justify-center" : ""}`} title={collapsed ? `${item.name} (${item.symbol})` : undefined}><div className="flex items-center gap-1.5"><span className={`h-1.5 w-1.5 shrink-0 rounded-full ${active ? "bg-emerald-400" : "bg-white/15"}`} />{!collapsed && <span className="truncate text-[11px] font-medium text-white/70">{item.symbol}</span>}</div>{!collapsed && <div className="mt-0.5 pl-3 text-[9px] text-white/22">{item.name}</div>}</button>
-            {!collapsed && <button type="button" aria-label={`${selected ? "Remove" : "Add"} ${item.symbol} watchlist`} onClick={() => onWatchlistToggle(item.symbol)} className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-white/20 hover:bg-white/5 hover:text-white/70">{selected ? <Star size={12} fill="currentColor" /> : <span className="text-[10px]">+</span>}</button>}
-          </div>; })}
-        </div>
-        {!collapsed && watchlistItems.length === 0 && <div className="px-2 py-2 text-[9px] leading-4 text-white/20">Use the market search to find a market, then add it to your watchlist.</div>}
-      </div>
+      <div className="mt-3 px-2">{!collapsed && <div className="mb-1 px-2 text-[9px] font-semibold uppercase tracking-[.14em] text-white/20">Instruments</div>}<div className="space-y-0.5">{watchlistItems.map((item) => { const active = item.symbol === symbol; const selected = selectedSymbols.includes(item.symbol); return <div key={item.symbol} className={`group flex items-center gap-1.5 rounded-md border px-1.5 py-2 transition ${active ? "border-white/9 bg-white/[.055]" : "border-transparent hover:bg-white/[.025]"} ${collapsed ? "justify-center" : ""}`}><button type="button" onClick={() => selectMarket(item.symbol)} className={`min-w-0 flex-1 text-left ${collapsed ? "flex justify-center" : ""}`} title={collapsed ? `${item.name} (${item.symbol})` : undefined}><div className="flex items-center gap-1.5"><span className={`h-1.5 w-1.5 shrink-0 rounded-full ${active ? "bg-emerald-400" : "bg-white/15"}`} />{!collapsed && <span className="truncate text-[11px] font-medium text-white/70">{item.symbol}</span>}</div>{!collapsed && <div className="mt-0.5 pl-3 text-[9px] text-white/22">{item.name}</div>}</button>{!collapsed && <button type="button" aria-label={`${selected ? "Remove" : "Add"} ${item.symbol} watchlist`} onClick={() => onWatchlistToggle(item.symbol)} className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-white/20 hover:bg-white/5 hover:text-white/70">{selected ? <Star size={12} fill="currentColor" /> : <span className="text-[10px]">+</span>}</button>}</div>; })}</div>{!collapsed && watchlistItems.length === 0 && <div className="px-2 py-2 text-[9px] leading-4 text-white/20">Search any Binance Spot market above to start.</div>}</div>
       <div className="mt-auto border-t border-white/7 px-2 py-2.5">{!collapsed ? <div className="flex items-center gap-2 px-1 text-[9px] uppercase tracking-[.1em] text-white/20"><Activity size={12} /> Pattern engine v1</div> : <div className="flex justify-center"><Activity size={13} className="text-white/20" /></div>}</div>
     </div>
   </aside>;
