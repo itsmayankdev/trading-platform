@@ -18,6 +18,8 @@ type LiveQuote = { price: number; change: number };
 type PinTarget = Omit<FavoritePattern, "id" | "name" | "createdAt">;
 const WATCHLIST_KEY = "market-memory-watchlist";
 const DEFAULT_SYMBOL = "ETHUSDT";
+const DASHBOARD_CHART_CANDLES = 240;
+const SEARCH_DEBOUNCE_MS = 180;
 
 export default function Dashboard() {
   const [symbol, setSymbol] = useState(() => readGlobalMarket(DEFAULT_SYMBOL).symbol);
@@ -40,7 +42,7 @@ export default function Dashboard() {
   const favoriteMatchIndexRef = useRef<number | null>(null);
 
   useEffect(() => { try { const saved = JSON.parse(window.localStorage.getItem(WATCHLIST_KEY) || "[]"); if (Array.isArray(saved)) setWatchlist(saved.filter((item): item is string => typeof item === "string")); } catch {} }, []);
-  function warmChart(value: string, nextTimeframe = timeframe) { void prefetchMarketCandles(value, nextTimeframe, Math.max(Number(patternLength) * 2, 120)).catch(() => {}); }
+  function warmChart(value: string, nextTimeframe = timeframe) { void prefetchMarketCandles(value, nextTimeframe, DASHBOARD_CHART_CANDLES).catch(() => {}); }
   function selectSymbol(value: string) { writeGlobalMarket(value, timeframe); warmChart(value); setSymbol(value); setError(""); setLiveQuote(null); setSelectedMatchIndex(0); void fetch(`/api/backend/api/v1/instruments/usage?symbol=${encodeURIComponent(value)}`, { method: "POST", credentials: "include", cache: "no-store" }).catch(() => {}); }
   function changeTimeframe(value: string) { writeGlobalMarket(symbol, value); warmChart(symbol, value); setTimeframe(value); setError(""); setLiveQuote(null); setSelectedMatchIndex(0); }
   function changePatternLength(value: string) { setPatternLength(value); setError(""); setSelectedMatchIndex(0); }
@@ -51,8 +53,16 @@ export default function Dashboard() {
   useEffect(() => { const id = new URLSearchParams(window.location.search).get("favorite"); if (!id) return; const favorite = readFavoritePatterns().find((item) => item.id === id); if (!favorite) return; favoriteMatchIndexRef.current = favorite.matchIndex ?? null; writeGlobalMarket(favorite.symbol, favorite.timeframe); warmChart(favorite.symbol, favorite.timeframe); setSymbol(favorite.symbol); setTimeframe(favorite.timeframe); setPatternLength(String(favorite.patternLength)); setSelectedMatchIndex(favorite.matchIndex ?? 0); }, []);
   async function refreshLiveQuote() { try { const response = await fetch(`/api/backend/api/v1/quote?symbol=${encodeURIComponent(symbol)}`, { credentials: "include", cache: "no-store" }); if (!response.ok) return; const result = await response.json() as { price: number; change_percent_24h: number }; if (typeof result.price !== "number") return; setLiveQuote({ price: result.price, change: result.change_percent_24h ?? 0 }); } catch {} }
   async function searchPatterns() { const requestedTopK = Number(topK); const requestedPatternLength = Number(patternLength); if (!Number.isInteger(requestedTopK) || requestedTopK < 5 || requestedTopK > 50 || !Number.isInteger(requestedPatternLength) || requestedPatternLength < 5 || requestedPatternLength > 500) return; searchAbortRef.current?.abort(); const controller = new AbortController(); searchAbortRef.current = controller; const requestId = ++searchRequestRef.current; setLoading(true); setError(""); const timeout = window.setTimeout(() => controller.abort(), 30000); try { const params = new URLSearchParams({ symbol, timeframe, pattern_length: String(requestedPatternLength), top_k: String(requestedTopK) }); const response = await fetch(`/api/backend/api/v1/pattern-search?${params.toString()}`, { cache: "no-store", signal: controller.signal }); if (!response.ok) { let message = `Pattern search returned ${response.status}`; try { const body = await response.json(); if (body?.detail) message = body.detail; } catch {} if (requestId === searchRequestRef.current) setError(message); return; } const next = await response.json() as SearchResponse; if (requestId === searchRequestRef.current && !controller.signal.aborted) { setData(next); if (favoriteMatchIndexRef.current != null) { setSelectedMatchIndex(Math.min(favoriteMatchIndexRef.current, Math.max(0, next.matches.length - 1))); favoriteMatchIndexRef.current = null; } } } catch (caught: unknown) { if (controller.signal.aborted) { if (requestId === searchRequestRef.current) setError("Pattern search timed out. Try again or reduce the match count."); return; } if (requestId === searchRequestRef.current) setError(caught instanceof Error ? caught.message : "Could not reach the Pattern Search service. Check that FastAPI is running."); } finally { window.clearTimeout(timeout); if (requestId === searchRequestRef.current) setLoading(false); } }
-  useEffect(() => { void searchPatterns(); return () => searchAbortRef.current?.abort(); }, [symbol, timeframe, patternLength, topK]);
-  useEffect(() => { const initialTimer = window.setTimeout(() => void refreshLiveQuote(), 0); const interval = window.setInterval(() => void refreshLiveQuote(), 10000); return () => { window.clearTimeout(initialTimer); window.clearInterval(interval); }; }, [symbol, timeframe]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => void searchPatterns(), SEARCH_DEBOUNCE_MS);
+    return () => {
+      window.clearTimeout(timer);
+      searchAbortRef.current?.abort();
+    };
+    // Search is intentionally driven by the four dashboard controls only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [symbol, timeframe, patternLength, topK]);
+  useEffect(() => { const initialTimer = window.setTimeout(() => void refreshLiveQuote(), 0); const interval = window.setInterval(() => void refreshLiveQuote(), 10000); return () => { window.clearTimeout(initialTimer); window.clearInterval(interval); }; }, [symbol]);
   function pinCurrent() { if (!data) return; setPinTarget({ type: "current", symbol: data.symbol, timeframe: data.timeframe, patternLength: data.pattern_length, startTime: data.current_pattern.start_time, endTime: data.current_pattern.end_time }); }
   function pinHistorical() { if (!data || !data.matches[selectedMatchIndex]) return; const match = data.matches[selectedMatchIndex]; setPinTarget({ type: "historical", symbol: data.symbol, timeframe: data.timeframe, patternLength: data.pattern_length, startTime: match.start_time, endTime: match.end_time, similarityScore: match.similarity_score, matchIndex: selectedMatchIndex }); }
 
