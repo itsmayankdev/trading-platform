@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import { Maximize2, Minimize2, Pin, RotateCcw } from "lucide-react";
-import { CandlestickSeries, ColorType, createChart, type CandlestickData, type IChartApi, type MouseEventParams, type Time } from "lightweight-charts";
+import { CandlestickSeries, ColorType, createChart, type CandlestickData, type IChartApi, type ISeriesApi, type MouseEventParams, type Time } from "lightweight-charts";
 import { getMarketCandles, prefetchMarketCandles, refreshMarketCandles, type CachedCandle } from "@/lib/marketCache";
 
 type Candle = CachedCandle;
@@ -30,6 +30,7 @@ function formatCandleTime(value: number) { return candleTimeFormatter.format(new
 export default function MarketChart({ symbol, timeframe, patternLength, highlightLocked, dashboardFullscreen, onFullscreenToggle, onPin }: MarketChartProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
+  const seriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const patternBoxRef = useRef<HTMLDivElement | null>(null);
   const tooltipRef = useRef<HTMLDivElement | null>(null);
   const candlesRef = useRef<Candle[]>([]);
@@ -67,6 +68,7 @@ export default function MarketChart({ symbol, timeframe, patternLength, highligh
     chartRef.current = chart;
 
     const series = chart.addSeries(CandlestickSeries, { upColor: "#22c55e", downColor: "#ef4444", borderVisible: false, wickUpColor: "#22c55e", wickDownColor: "#ef4444" });
+    seriesRef.current = series;
     const resizeObserver = new ResizeObserver(() => {
       if (disposed) return;
       chart.applyOptions({ width: host.clientWidth, height: Math.max(300, host.clientHeight) });
@@ -92,10 +94,8 @@ export default function MarketChart({ symbol, timeframe, patternLength, highligh
     }
     chart.subscribeCrosshairMove(handleCrosshairMove);
 
-    function render(allCandles: Candle[]) {
+    function render(allCandles: Candle[], refit = true) {
       if (disposed || allCandles.length === 0) return false;
-      // Keep a fixed 30-candle context before the selected live pattern.
-      // Example: 20 selected => 50 visible candles; 45 => 75; 90 => 120.
       const visibleCount = patternLengthRef.current + LIVE_CONTEXT_CANDLES;
       const candles = allCandles.slice(-visibleCount);
       if (candles.length === 0) return false;
@@ -104,11 +104,14 @@ export default function MarketChart({ symbol, timeframe, patternLength, highligh
       const signature = `${candles.length}:${first.time}:${last.time}:${last.close}`;
       candlesRef.current = candles;
       candleByTimeRef.current = new Map(candles.map((candle) => [candle.time, candle]));
-      if (signature === renderedSignatureRef.current) return true;
+      if (signature === renderedSignatureRef.current) {
+        if (patternBoxRef.current) positionPatternBox(chart, patternBoxRef.current, candles, patternLengthRef.current);
+        return true;
+      }
       renderedSignatureRef.current = signature;
       const data: CandlestickData<Time>[] = candles.map((candle) => ({ time: candle.time as Time, open: candle.open, high: candle.high, low: candle.low, close: candle.close }));
       series.setData(data);
-      chart.timeScale().fitContent();
+      if (refit) chart.timeScale().fitContent();
       if (patternBoxRef.current) positionPatternBox(chart, patternBoxRef.current, candles, patternLengthRef.current);
       return true;
     }
@@ -146,10 +149,29 @@ export default function MarketChart({ symbol, timeframe, patternLength, highligh
       chart.unsubscribeCrosshairMove(handleCrosshairMove);
       hideTooltip();
       candleByTimeRef.current.clear();
+      if (seriesRef.current === series) seriesRef.current = null;
       if (chartRef.current === chart) chartRef.current = null;
       chart.remove();
     };
+  // Pattern-length changes update the existing series below; recreating the chart here would make the dashboard feel sluggish.
   // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [symbol, timeframe]);
+
+  useEffect(() => {
+    const chart = chartRef.current;
+    const series = seriesRef.current;
+    if (!chart || !series) return;
+    const cached = getMarketCandles(symbol, timeframe);
+    if (!cached || cached.length === 0) return;
+    const visibleCount = patternLength + LIVE_CONTEXT_CANDLES;
+    const candles = cached.slice(-visibleCount);
+    if (candles.length === 0) return;
+    candlesRef.current = candles;
+    candleByTimeRef.current = new Map(candles.map((candle) => [candle.time, candle]));
+    renderedSignatureRef.current = `${candles.length}:${candles[0].time}:${candles[candles.length - 1].time}:${candles[candles.length - 1].close}`;
+    series.setData(candles.map((candle) => ({ time: candle.time as Time, open: candle.open, high: candle.high, low: candle.low, close: candle.close })));
+    chart.timeScale().fitContent();
+    if (patternBoxRef.current) positionPatternBox(chart, patternBoxRef.current, candles, patternLength);
   }, [symbol, timeframe, patternLength]);
 
   useEffect(() => {
