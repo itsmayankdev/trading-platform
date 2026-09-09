@@ -88,18 +88,18 @@ def _run_and_release(symbol: str, timeframe: str) -> None:
             _running.pop((symbol, timeframe), None)
 
 
-def _submit_full_history(symbol: str) -> None:
-    for timeframe in _TIMEFRAMES:
-        key = (symbol.upper(), timeframe)
-        with _lock:
-            existing = _running.get(key)
-            if existing is not None and not existing.done():
-                continue
-            _running[key] = _executor.submit(_run_and_release, symbol.upper(), timeframe)
+def _submit_full_history(symbol: str, timeframe: str) -> None:
+    """Warm only the timeframe the user requested; never create hidden work for other charts."""
+    key = (symbol.upper(), timeframe)
+    with _lock:
+        existing = _running.get(key)
+        if existing is not None and not existing.done():
+            return
+        _running[key] = _executor.submit(_run_and_release, symbol.upper(), timeframe)
 
 
 def ensure_market_data(symbol: str, timeframe: str, minimum_candles: int) -> dict[str, object]:
-    """Provider dispatcher with the existing Binance path left intact."""
+    """Provider dispatcher with bounded foreground work and request-scoped background warming."""
     symbol = symbol.upper()
     timeframe = timeframe.lower()
     with SessionLocal() as db:
@@ -118,5 +118,9 @@ def ensure_market_data(symbol: str, timeframe: str, minimum_candles: int) -> dic
         count = _fast_seed(symbol, timeframe, minimum_candles)
         seeded = count > before
         min_time, max_time, count = _coverage(symbol, timeframe)
-    _submit_full_history(symbol)
+    # The requested timeframe gets background history. Other timeframes are
+    # deliberately left alone until the user requests them or the scheduler
+    # promotes them based on actual usage. This prevents chart requests from
+    # competing with unrelated 15m/1h downloads.
+    _submit_full_history(symbol, timeframe)
     return {"symbol": symbol, "timeframe": timeframe, "candle_count": count, "start_time": min_time.isoformat() if min_time else None, "end_time": max_time.isoformat() if max_time else None, "seeded": seeded, "target_history_days": _TARGET_HISTORY_DAYS}
