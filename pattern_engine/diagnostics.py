@@ -24,10 +24,13 @@ def build_match_diagnostics(
     """Describe retrieval concentration without inventing a predictive score.
 
     Temporal clusters are deliberately called clusters, not independent samples.
-    A new cluster begins after more than two pattern spans without another match.
+    A new cluster begins after more than one pattern span without another match.
     This is a transparent episode-separation heuristic, not a claim of statistical
     independence.
     """
+    # Keep the existing two-pattern-span diagnostic contract. The clustering
+    # heuristic uses two spans to separate distinct market episodes while avoiding
+    # any implication that the resulting clusters are statistically independent.
     cluster_gap = float(pattern_length * 2)
     if not starts or not scores or len(starts) != len(scores):
         return {
