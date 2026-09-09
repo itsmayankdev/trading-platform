@@ -47,8 +47,12 @@ class IngestionPlanner:
                     SELECT id, symbol
                     FROM instruments
                     WHERE is_enabled = TRUE
+                      AND is_listed = TRUE
+                      AND is_spot_trading_allowed = TRUE
+                      AND exchange_status = 'TRADING'
                       AND exchange = 'binance'
                       AND provider = 'binance'
+                      AND quote_asset = 'USDT'
                     ORDER BY symbol
                     """
                 )
