@@ -9,6 +9,8 @@ type Candle = CachedCandle;
 type MarketChartProps = { symbol: string; timeframe: string; patternLength: number; highlightLocked: boolean; dashboardFullscreen: boolean; onFullscreenToggle: () => void; onPin?: () => void };
 const numberFormatter = new Intl.NumberFormat("en-US", { maximumFractionDigits: 4 });
 const candleTimeFormatter = new Intl.DateTimeFormat("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "UTC" });
+const CHART_CANDLE_LIMIT = 240;
+const LIVE_REFRESH_MS = 10_000;
 
 function positionPatternBox(chart: IChartApi, box: HTMLDivElement, candles: Candle[], patternLength: number) {
   if (candles.length < patternLength) return;
@@ -22,12 +24,7 @@ function positionPatternBox(chart: IChartApi, box: HTMLDivElement, candles: Cand
 }
 
 function formatNumber(value: number) { return numberFormatter.format(value); }
-function formatVolume(value: number) {
-  if (value >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(2)}B`;
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(2)}M`;
-  if (value >= 1_000) return `${(value / 1_000).toFixed(2)}K`;
-  return formatNumber(value);
-}
+function formatVolume(value: number) { if (value >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(2)}B`; if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(2)}M`; if (value >= 1_000) return `${(value / 1_000).toFixed(2)}K`; return formatNumber(value); }
 function formatCandleTime(value: number) { return candleTimeFormatter.format(new Date(value * 1000)); }
 
 export default function MarketChart({ symbol, timeframe, patternLength, highlightLocked, dashboardFullscreen, onFullscreenToggle, onPin }: MarketChartProps) {
@@ -42,12 +39,7 @@ export default function MarketChart({ symbol, timeframe, patternLength, highligh
   patternLengthRef.current = patternLength;
 
   function hideTooltip() { if (tooltipRef.current) tooltipRef.current.style.opacity = "0"; }
-
-  function fitChart() {
-    chartRef.current?.timeScale().fitContent();
-    if (chartRef.current && patternBoxRef.current) positionPatternBox(chartRef.current, patternBoxRef.current, candlesRef.current, patternLengthRef.current);
-    hideTooltip();
-  }
+  function fitChart() { chartRef.current?.timeScale().fitContent(); if (chartRef.current && patternBoxRef.current) positionPatternBox(chartRef.current, patternBoxRef.current, candlesRef.current, patternLengthRef.current); hideTooltip(); }
 
   useEffect(() => {
     const container = containerRef.current;
@@ -55,6 +47,14 @@ export default function MarketChart({ symbol, timeframe, patternLength, highligh
     const host = container;
     let disposed = false;
     let retryTimer: number | null = null;
+    let liveRefreshTimer: number | null = null;
+
+    // A chart instance is new on every market/timeframe change. Never reuse
+    // the previous instance's render signature, or a cached dataset can leave
+    // the new chart visually empty.
+    renderedSignatureRef.current = "";
+    candlesRef.current = [];
+    candleByTimeRef.current.clear();
 
     const chart = createChart(host, {
       width: host.clientWidth,
@@ -69,18 +69,11 @@ export default function MarketChart({ symbol, timeframe, patternLength, highligh
     });
     chartRef.current = chart;
 
-    const series = chart.addSeries(CandlestickSeries, {
-      upColor: "#22c55e",
-      downColor: "#ef4444",
-      borderVisible: false,
-      wickUpColor: "#22c55e",
-      wickDownColor: "#ef4444",
-    });
-
+    const series = chart.addSeries(CandlestickSeries, { upColor: "#22c55e", downColor: "#ef4444", borderVisible: false, wickUpColor: "#22c55e", wickDownColor: "#ef4444" });
     const resizeObserver = new ResizeObserver(() => {
       if (disposed) return;
       chart.applyOptions({ width: host.clientWidth, height: Math.max(300, host.clientHeight) });
-      if (!disposed && patternBoxRef.current) positionPatternBox(chart, patternBoxRef.current, candlesRef.current, patternLengthRef.current);
+      if (patternBoxRef.current) positionPatternBox(chart, patternBoxRef.current, candlesRef.current, patternLengthRef.current);
     });
     resizeObserver.observe(host);
 
@@ -114,39 +107,38 @@ export default function MarketChart({ symbol, timeframe, patternLength, highligh
       const data: CandlestickData<Time>[] = candles.map((candle) => ({ time: candle.time as Time, open: candle.open, high: candle.high, low: candle.low, close: candle.close }));
       series.setData(data);
       chart.timeScale().fitContent();
-      if (!disposed && patternBoxRef.current) positionPatternBox(chart, patternBoxRef.current, candles, patternLengthRef.current);
+      if (patternBoxRef.current) positionPatternBox(chart, patternBoxRef.current, candles, patternLengthRef.current);
       return true;
     }
 
-    async function loadCandles(attempt = 0) {
+    async function loadCandles(force: boolean, attempt = 0) {
       if (disposed) return;
-      const limit = Math.max(patternLengthRef.current * 2, 120);
       const cached = getMarketCandles(symbol, timeframe);
       if (cached && cached.length > 0) render(cached);
-
       try {
-        const candles = cached && cached.length > 0
-          ? await refreshMarketCandles(symbol, timeframe, limit)
-          : await prefetchMarketCandles(symbol, timeframe, limit);
+        const candles = force
+          ? await refreshMarketCandles(symbol, timeframe, CHART_CANDLE_LIMIT)
+          : await prefetchMarketCandles(symbol, timeframe, CHART_CANDLE_LIMIT);
         if (disposed) return;
         if (candles.length > 0) {
           render(candles);
           return;
         }
-        if (attempt < 2) retryTimer = window.setTimeout(() => void loadCandles(attempt + 1), 900 * (attempt + 1));
-        else console.warn(`No candles returned for ${symbol} ${timeframe}`);
+        if (attempt < 2) retryTimer = window.setTimeout(() => void loadCandles(false, attempt + 1), 900 * (attempt + 1));
       } catch (error) {
         if (disposed) return;
-        if (attempt < 2) retryTimer = window.setTimeout(() => void loadCandles(attempt + 1), 900 * (attempt + 1));
+        if (attempt < 2) retryTimer = window.setTimeout(() => void loadCandles(false, attempt + 1), 900 * (attempt + 1));
         else console.error("Failed to load candles:", error);
       }
     }
 
-    void loadCandles();
+    void loadCandles(false);
+    liveRefreshTimer = window.setInterval(() => void loadCandles(true), LIVE_REFRESH_MS);
 
     return () => {
       disposed = true;
       if (retryTimer != null) window.clearTimeout(retryTimer);
+      if (liveRefreshTimer != null) window.clearInterval(liveRefreshTimer);
       resizeObserver.disconnect();
       chart.unsubscribeCrosshairMove(handleCrosshairMove);
       hideTooltip();
