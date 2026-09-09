@@ -46,9 +46,19 @@ class YahooFinanceProvider(MarketDataProvider):
         if start >= end:
             raise ValueError("start must be before end")
 
+        # Yahoo is more reliable for intraday requests when its supported
+        # period form is used. We deliberately keep the foreground period
+        # small and filter it back to the exact requested UTC range.
+        days = (end - start).total_seconds() / 86400.0
+        if interval == "1m":
+            period = "7d"
+        elif interval in {"2m", "5m", "15m", "30m", "60m", "90m", "1h"}:
+            period = "60d" if days > 5 else "5d"
+        else:
+            period = "10y"
+
         frame = yf.Ticker(symbol.upper()).history(
-            start=start,
-            end=end,
+            period=period,
             interval=interval,
             auto_adjust=False,
             actions=False,
@@ -56,6 +66,17 @@ class YahooFinanceProvider(MarketDataProvider):
             repair=False,
             timeout=12,
         )
+        if frame is None or frame.empty:
+            return []
+
+        try:
+            start_utc = start.astimezone(timezone.utc)
+            end_utc = end.astimezone(timezone.utc)
+            index = frame.index
+            frame = frame[(index >= start_utc) & (index <= end_utc)]
+        except (TypeError, ValueError):
+            pass
+
         return self._frame_to_candles(frame)
 
     def search(self, query: str, limit: int = 12) -> list[YahooSearchResult]:
