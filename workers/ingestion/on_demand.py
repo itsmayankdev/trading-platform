@@ -62,6 +62,44 @@ def _fast_seed(symbol: str, timeframe: str, minimum_candles: int) -> int:
     return max(count, inserted)
 
 
+def refresh_latest_market_candle(symbol: str, timeframe: str) -> bool:
+    """Refresh only the current Binance candle; historical chart requests never call this."""
+    symbol = symbol.upper()
+    timeframe = timeframe.lower()
+    if timeframe not in TIMEFRAME_MINUTES:
+        raise ValueError(f"Unsupported timeframe: {timeframe}")
+
+    with SessionLocal() as db:
+        row = db.execute(text("""
+            SELECT id, exchange, provider, is_listed, is_spot_trading_allowed
+            FROM instruments WHERE symbol = :symbol LIMIT 1
+        """), {"symbol": symbol}).one_or_none()
+    if row is None:
+        return False
+    instrument_id, exchange, provider, is_listed, is_spot = row
+    if exchange != "binance" or provider != "binance" or not is_listed or not is_spot:
+        return False
+
+    delta = timeframe_delta(timeframe)
+    now = datetime.now(timezone.utc)
+    end = floor_to_timeframe(now, timeframe) + delta
+    start = end - (delta * 2)
+    candles = BinanceProvider().get_candles(symbol=symbol, timeframe=timeframe, start=start, end=end)
+    current_start = floor_to_timeframe(now, timeframe)
+    current = [candle for candle in candles if candle.timestamp == current_start]
+    if not current:
+        return False
+    candle = current[-1]
+    validation = CandleValidator().validate(candles=[candle], timeframe_minutes=TIMEFRAME_MINUTES[timeframe])
+    if not validation.valid:
+        raise RuntimeError("Latest market candle failed validation")
+
+    with SessionLocal() as db:
+        CandleRepository().upsert_many(db=db, instrument_id=instrument_id, timeframe=timeframe, candles=[candle])
+        db.commit()
+    return True
+
+
 def _run_full_history(symbol: str, timeframe: str) -> None:
     symbol = symbol.upper()
     now = datetime.now(timezone.utc)
