@@ -86,3 +86,35 @@ def test_numerical_ranker_matches_bruteforce_ranker():
         rtol=1e-12,
         atol=1e-12,
     )
+
+
+def test_numerical_ranker_handles_more_than_one_processing_chunk():
+    candles = _candles(25_050)
+    length = 45
+    windows = build_windows("TESTUSDT", "5m", candles, length)
+    current = windows[-1]
+    historical = [window for window in windows if window.end_time < current.start_time]
+
+    ranker = PatternRanker("similarity_v1")
+    expected = ranker.rank(
+        current=current,
+        historical_windows=historical,
+        top_k=5,
+        min_separation_candles=length,
+    )
+
+    store = build_numerical_store(candles, length)
+    actual = ranker.rank_numerical_v1(
+        current=current,
+        store=store,
+        top_k=5,
+        min_separation_candles=length,
+    )
+
+    assert [match.start_time for match in actual] == [match.start_time for match in expected]
+    np.testing.assert_allclose(
+        [match.similarity_score for match in actual],
+        [match.similarity_score for match in expected],
+        rtol=1e-12,
+        atol=1e-12,
+    )
