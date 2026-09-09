@@ -12,6 +12,7 @@ from backend.app.repositories.instrument import InstrumentRepository
 from pattern_engine.ranking import PatternRanker
 from pattern_engine.retrieval.numerical import NumericalWindowStore
 from pattern_engine.window import CandlePoint, PatternWindow
+from workers.ingestion.on_demand import ensure_market_data
 
 router = APIRouter(prefix="/api/v1", tags=["evaluation"])
 instrument_repository = InstrumentRepository()
@@ -46,6 +47,10 @@ def evaluation(request: Request, symbol:str=Query(default="ETHUSDT",min_length=1
     user=require_user(request,db); require_permission(user,"evaluation.use")
     symbol,timeframe=symbol.upper(),timeframe.lower(); instrument=instrument_repository.get_by_symbol(db=db,symbol=symbol)
     if instrument is None: raise HTTPException(status_code=404,detail=f"Instrument not found: {symbol}")
+    try:
+        ensure_market_data(symbol=symbol,timeframe=timeframe,minimum_candles=pattern_length+max(HORIZONS)+20)
+    except ValueError as exc:
+        raise HTTPException(status_code=400,detail=str(exc)) from exc
     rows=list(db.execute(select(Candle.timestamp,Candle.open,Candle.high,Candle.low,Candle.close,Candle.volume).where(Candle.instrument_id==instrument.id,Candle.timeframe==timeframe).order_by(Candle.timestamp.asc())).all())
     if len(rows)<pattern_length+max(HORIZONS)+20: raise HTTPException(status_code=400,detail="Not enough candles for evaluation")
     timestamps=[r.timestamp for r in rows]; closes=np.asarray([float(r.close) for r in rows],dtype=np.float64); minimum_history_end=(pattern_length*2)-1; start_idx=max(minimum_history_end,pattern_length-1)
