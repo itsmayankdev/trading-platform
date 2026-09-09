@@ -72,27 +72,44 @@ class NumericalWindowStore:
         top_k: int,
         min_separation_candles: int,
     ) -> list[tuple[int, float]]:
-        """Return exact V1-ranked historical candle start indices and scores."""
+        """Return exact V1-ranked historical candle start indices and scores.
+
+        Distance calculation is chunked so long histories do not allocate one
+        giant normalized window matrix. Scores and ordering remain equivalent
+        to the previous vectorized implementation.
+        """
         if top_k <= 0:
             return []
 
-        matrix = self.historical_normalized_matrix()
         starts = self.window_start_times()
         ends = self.window_end_times()
-        if len(matrix) == 0:
+        if len(starts) == 0:
             return []
 
         eligible = np.asarray(ends < current_start_time, dtype=bool)
-        matrix = matrix[eligible]
         original_indices = np.flatnonzero(eligible)
         starts = starts[eligible]
-
-        if len(matrix) == 0:
+        if len(starts) == 0:
             return []
 
-        current_path = self.current_normalized_path()
-        distances = np.sqrt(np.mean((matrix - current_path) ** 2, axis=1))
-        scores = np.exp(-distances * 10.0).clip(0.0, 1.0)
+        windows = np.lib.stride_tricks.sliding_window_view(self.close, self.window_length)
+        current_window = self.close[-self.window_length:]
+        current_path = current_window / current_window[0] - 1.0
+        scores = np.empty(len(starts), dtype=np.float64)
+
+        # Keep the temporary normalized matrix bounded even when a market has
+        # years of 1m/5m candles. The final score array is only one float/window.
+        chunk_size = 25_000
+        eligible_positions = np.flatnonzero(eligible)
+        for chunk_start in range(0, len(eligible_positions), chunk_size):
+            positions = eligible_positions[chunk_start : chunk_start + chunk_size]
+            chunk = windows[positions]
+            normalized = chunk / chunk[:, :1] - 1.0
+            distances = np.sqrt(np.mean((normalized - current_path) ** 2, axis=1))
+            scores[chunk_start : chunk_start + len(positions)] = np.exp(-distances * 10.0).clip(0.0, 1.0)
+
+        # Stable descending sort preserves the exact tie behavior of the old
+        # full-matrix implementation while keeping peak memory bounded.
         ranked = np.argsort(-scores, kind="stable")
 
         minimum_separation = None
