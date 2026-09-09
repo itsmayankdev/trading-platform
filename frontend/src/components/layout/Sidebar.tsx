@@ -17,6 +17,7 @@ type SidebarProps = {
 
 type MenuItem = { label: string; href: string; icon: typeof LayoutDashboard };
 
+const WATCHLIST_KEY = "market-memory-watchlist";
 const MENU: MenuItem[] = [
   { label: "Market Memory", href: "/", icon: LayoutDashboard },
   { label: "Pattern Quality", href: "/evidence", icon: BarChart3 },
@@ -27,9 +28,21 @@ const MENU: MenuItem[] = [
   { label: "Cross-Market Validation", href: "/validation", icon: Globe2 },
 ];
 
-export default function Sidebar({ symbol, collapsed, onCollapsedChange, onSymbolSelect, selectedSymbols = [], onWatchlistToggle }: SidebarProps) {
+function readWatchlist() {
+  if (typeof window === "undefined") return [] as string[];
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(WATCHLIST_KEY) || "[]");
+    if (!Array.isArray(saved)) return [];
+    return saved.filter((item): item is string => typeof item === "string").map(normalizeMarketSymbol).filter(Boolean).slice(-20);
+  } catch {
+    return [];
+  }
+}
+
+export default function Sidebar({ symbol, collapsed, onCollapsedChange, onSymbolSelect, onWatchlistToggle }: SidebarProps) {
   const initialized = useRef(false);
   const [globalSymbol, setGlobalSymbol] = useState(() => readGlobalMarket(symbol).symbol);
+  const [watchlist, setWatchlist] = useState<string[]>(readWatchlist);
   const [owner, setOwner] = useState(false);
 
   useEffect(() => {
@@ -40,7 +53,7 @@ export default function Sidebar({ symbol, collapsed, onCollapsedChange, onSymbol
       if (initial && initial !== symbol) onSymbolSelect(initial);
     }
 
-    const sync = (event: Event) => {
+    const syncMarket = (event: Event) => {
       const next = event instanceof CustomEvent
         ? String((event.detail as { symbol?: string })?.symbol || "")
         : readGlobalMarket(symbol).symbol;
@@ -49,11 +62,12 @@ export default function Sidebar({ symbol, collapsed, onCollapsedChange, onSymbol
       if (next !== symbol) onSymbolSelect(next);
     };
 
-    window.addEventListener(MARKET_CONTEXT_EVENT, sync);
-    window.addEventListener("storage", sync);
+    const syncWatchlist = () => setWatchlist(readWatchlist());
+    window.addEventListener(MARKET_CONTEXT_EVENT, syncMarket);
+    window.addEventListener("storage", syncWatchlist);
     return () => {
-      window.removeEventListener(MARKET_CONTEXT_EVENT, sync);
-      window.removeEventListener("storage", sync);
+      window.removeEventListener(MARKET_CONTEXT_EVENT, syncMarket);
+      window.removeEventListener("storage", syncWatchlist);
     };
   }, [onSymbolSelect, symbol]);
 
@@ -85,7 +99,14 @@ export default function Sidebar({ symbol, collapsed, onCollapsedChange, onSymbol
   const removeWatchlistMarket = (event: React.MouseEvent, market: string) => {
     event.preventDefault();
     event.stopPropagation();
-    onWatchlistToggle?.(market);
+    if (onWatchlistToggle) {
+      onWatchlistToggle(market);
+      return;
+    }
+    const next = watchlist.filter((item) => item !== market);
+    try { window.localStorage.setItem(WATCHLIST_KEY, JSON.stringify(next)); } catch {}
+    setWatchlist(next);
+    window.dispatchEvent(new Event("storage"));
   };
 
   const itemClass = (href: string) => `flex items-center gap-2 rounded-md px-2.5 py-2 text-[10px] font-medium transition text-white/45 hover:bg-white/[0.03] hover:text-white/70 ${collapsed ? "justify-center px-0" : ""}`;
@@ -123,24 +144,22 @@ export default function Sidebar({ symbol, collapsed, onCollapsedChange, onSymbol
         {!collapsed && (
           <div className="min-h-0 flex-1 overflow-y-auto border-t border-white/7 px-2 py-2">
             <div className="mb-1 px-1 text-[8px] font-semibold uppercase tracking-[.14em] text-white/20">Watchlist</div>
-            {selectedSymbols.length === 0 ? (
+            {watchlist.length === 0 ? (
               <div className="rounded-md border border-dashed border-white/7 px-2 py-2 text-[9px] leading-4 text-white/20">
-                Search a market above and add it to your watchlist from Market Memory.
+                Add markets to your watchlist from Market Memory.
               </div>
             ) : (
               <div className="space-y-0.5">
-                {selectedSymbols.map((market) => {
+                {watchlist.map((market) => {
                   const active = market === symbol;
                   return (
                     <div key={market} className={`group flex items-center rounded-md ${active ? "bg-white/[0.05]" : "hover:bg-white/[0.03]"}`}>
                       <button type="button" onClick={() => selectMarket(market)} className="min-w-0 flex-1 truncate px-2.5 py-2 text-left text-[10px] font-medium text-white/50 hover:text-white/80">
                         {market.replace(/USDT$/, "/USDT")}
                       </button>
-                      {onWatchlistToggle && (
-                        <button type="button" aria-label={`Remove ${market} from watchlist`} onClick={(event) => removeWatchlistMarket(event, market)} className="mr-1 hidden h-6 w-6 items-center justify-center rounded text-white/20 hover:bg-white/5 hover:text-white/60 group-hover:flex">
-                          <X size={11} />
-                        </button>
-                      )}
+                      <button type="button" aria-label={`Remove ${market} from watchlist`} onClick={(event) => removeWatchlistMarket(event, market)} className="mr-1 hidden h-6 w-6 items-center justify-center rounded text-white/20 hover:bg-white/5 hover:text-white/60 group-hover:flex">
+                        <X size={11} />
+                      </button>
                     </div>
                   );
                 })}
