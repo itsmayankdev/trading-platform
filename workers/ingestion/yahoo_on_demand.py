@@ -22,6 +22,7 @@ _MAX_WORKERS = 2
 
 _executor = ThreadPoolExecutor(max_workers=_MAX_WORKERS, thread_name_prefix="yahoo-warmup")
 _lock = Lock()
+_foreground_lock = Lock()
 _running: dict[tuple[str, str], Future[object]] = {}
 
 
@@ -91,11 +92,19 @@ def ensure_yahoo_market_data(symbol: str, timeframe: str, minimum_candles: int) 
     timeframe = timeframe.strip().lower()
     if timeframe not in _TIMEFRAMES:
         raise ValueError(f"Unsupported Yahoo timeframe: {timeframe}")
+
     min_time, max_time, count = _coverage(symbol, timeframe)
     if count < minimum_candles:
-        now = datetime.now(timezone.utc)
-        days = _FAST_INTRADAY_DAYS if timeframe != "1d" else _FAST_DAILY_DAYS
-        _fetch_and_store(symbol, timeframe, now - timedelta(days=days), now)
-        min_time, max_time, count = _coverage(symbol, timeframe)
+        # Pattern Search and MarketChart can request the same newly selected
+        # market concurrently. Coalesce the foreground fetch so Yahoo is only
+        # contacted once, then let both callers read the committed candles.
+        with _foreground_lock:
+            min_time, max_time, count = _coverage(symbol, timeframe)
+            if count < minimum_candles:
+                now = datetime.now(timezone.utc)
+                days = _FAST_INTRADAY_DAYS if timeframe != "1d" else _FAST_DAILY_DAYS
+                _fetch_and_store(symbol, timeframe, now - timedelta(days=days), now)
+                min_time, max_time, count = _coverage(symbol, timeframe)
+
     _submit_background(symbol)
     return {"symbol": symbol, "timeframe": timeframe, "candle_count": count, "start_time": min_time.isoformat() if min_time else None, "end_time": max_time.isoformat() if max_time else None, "provider": "yahoo", "intraday_history_limit_days": _ONE_MINUTE_FULL_DAYS if timeframe == "1m" else _INTRADAY_FULL_DAYS}
