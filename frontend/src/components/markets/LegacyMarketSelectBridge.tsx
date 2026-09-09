@@ -21,7 +21,6 @@ export default function LegacyMarketSelectBridge() {
       if (disposed || bridges.has(select) || !isLegacyMarketSelect(select)) return;
       const parent = select.parentElement;
       if (!parent) return;
-
       const host = document.createElement("div");
       host.className = "mt-1 min-w-[190px] relative";
       parent.insertBefore(host, select);
@@ -41,16 +40,21 @@ export default function LegacyMarketSelectBridge() {
         select.dispatchEvent(new Event("input", { bubbles: true }));
         select.dispatchEvent(new Event("change", { bubbles: true }));
       };
-
-      const onGlobal = (event: Event) => {
-        const detail = event instanceof CustomEvent ? event.detail as { symbol?: string } : undefined;
-        if (detail?.symbol) syncSelect(detail.symbol);
-      };
-
+      const onGlobal = (event: Event) => { const detail = event instanceof CustomEvent ? event.detail as { symbol?: string } : undefined; if (detail?.symbol) syncSelect(detail.symbol); };
       const root = createRoot(host);
       root.render(<MarketSelector value={normalizeMarketSymbol(select.value || readGlobalMarket().symbol)} onChange={(next) => { const normalized = normalizeMarketSymbol(next); if (!normalized) return; writeGlobalMarket(normalized); syncSelect(normalized); }} className="w-full" />);
       window.addEventListener(MARKET_CONTEXT_EVENT, onGlobal);
       bridges.set(select, { host, root, select, onGlobal });
+    };
+
+    const cleanupSelect = (select: HTMLSelectElement) => {
+      const bridge = bridges.get(select);
+      if (!bridge) return;
+      window.removeEventListener(MARKET_CONTEXT_EVENT, bridge.onGlobal);
+      bridge.root.unmount();
+      bridge.host.remove();
+      select.style.display = "";
+      bridges.delete(select);
     };
 
     const enhanceAll = () => document.querySelectorAll<HTMLSelectElement>("select").forEach(enhanceSelect);
@@ -58,31 +62,18 @@ export default function LegacyMarketSelectBridge() {
       for (const record of records) {
         record.addedNodes.forEach((node) => {
           if (node instanceof HTMLSelectElement) enhanceSelect(node);
-          if (node instanceof Element) node.querySelectorAll<HTMLSelectElement>("select").forEach(enhanceSelect);
+          else if (node instanceof Element) node.querySelectorAll<HTMLSelectElement>("select").forEach(enhanceSelect);
         });
         record.removedNodes.forEach((node) => {
-          if (!(node instanceof HTMLSelectElement)) return;
-          const bridge = bridges.get(node);
-          if (!bridge) return;
-          window.removeEventListener(MARKET_CONTEXT_EVENT, bridge.onGlobal);
-          bridge.root.unmount();
-          bridge.host.remove();
-          node.style.display = "";
-          bridges.delete(node);
+          if (node instanceof HTMLSelectElement) cleanupSelect(node);
+          else if (node instanceof Element) node.querySelectorAll<HTMLSelectElement>("select").forEach(cleanupSelect);
         });
       }
     });
 
     enhanceAll();
     observer.observe(document.body, { childList: true, subtree: true });
-
-    return () => {
-      disposed = true;
-      observer.disconnect();
-      bridges.forEach((entry) => { window.removeEventListener(MARKET_CONTEXT_EVENT, entry.onGlobal); entry.root.unmount(); entry.host.remove(); entry.select.style.display = ""; });
-      bridges.clear();
-    };
+    return () => { disposed = true; observer.disconnect(); bridges.forEach((entry) => { window.removeEventListener(MARKET_CONTEXT_EVENT, entry.onGlobal); entry.root.unmount(); entry.host.remove(); entry.select.style.display = ""; }); bridges.clear(); };
   }, []);
-
   return null;
 }
