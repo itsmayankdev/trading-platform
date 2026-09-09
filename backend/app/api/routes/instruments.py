@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from time import monotonic
 
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import case, func, or_, select
@@ -14,6 +15,24 @@ from market_data.timeframes.utils import TIMEFRAME_MINUTES
 from workers.ingestion.instrument_registry import InstrumentRegistrySync
 
 router = APIRouter(prefix="/api/v1", tags=["instruments"])
+TICKER_CACHE_TTL_SECONDS = 30.0
+_ticker_cache: dict[str, float] = {}
+_ticker_cache_at = 0.0
+
+
+def _get_ticker_map() -> dict[str, float]:
+    global _ticker_cache, _ticker_cache_at
+    now = monotonic()
+    if now - _ticker_cache_at < TICKER_CACHE_TTL_SECONDS and _ticker_cache:
+        return _ticker_cache
+    try:
+        _ticker_cache = {ticker.symbol: float(ticker.quote_volume) for ticker in BinanceTickerProvider().get_24h_tickers()}
+        _ticker_cache_at = now
+    except Exception:
+        # Keep the last good snapshot when Binance is temporarily unavailable.
+        if not _ticker_cache:
+            _ticker_cache = {}
+    return _ticker_cache
 
 
 @router.get("/instruments")
@@ -50,10 +69,7 @@ def list_instruments(
     ticker_map: dict[str, float] = {}
     candidates = db.execute(stmt).scalars().all()
     if q or sort.lower() == "volume":
-        try:
-            ticker_map = {ticker.symbol: float(ticker.quote_volume) for ticker in BinanceTickerProvider().get_24h_tickers()}
-        except Exception:
-            ticker_map = {}
+        ticker_map = _get_ticker_map()
 
     def relevance(row: Instrument) -> int:
         if not q:
@@ -77,8 +93,8 @@ def list_instruments(
             return 6
         return 7
 
-    # One market per base asset: for ETH, BTC, etc. keep the best matching/liquid
-    # Binance Spot pair instead of flooding autocomplete with ETHUSDT/ETHUSDC/ETHBTC.
+    # One market per base asset. For ETH, BTC, etc. keep the best matching and
+    # most liquid Binance Spot pair instead of flooding autocomplete with variants.
     if q or sort.lower() == "volume":
         candidates.sort(key=lambda row: (relevance(row), -ticker_map.get(row.symbol, 0.0), row.symbol))
         unique: list[Instrument] = []
