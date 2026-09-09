@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Activity, BarChart3, Bell, ChevronLeft, ChevronRight, FlaskConical, Globe2, LayoutDashboard, ScanSearch, ShieldCheck, Star, UserRound } from "lucide-react";
+import { createRoot, type Root } from "react-dom/client";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import MarketSelector from "@/components/markets/MarketSelector";
@@ -32,6 +33,45 @@ export default function Sidebar({ symbol, collapsed, onCollapsedChange, onSymbol
   }, [onSymbolSelect, symbol]);
 
   useEffect(() => { if (!initialized.current || !symbol || symbol === globalSymbol) return; writeGlobalMarket(symbol); setGlobalSymbol(symbol); }, [symbol, globalSymbol]);
+
+  // Migration bridge: legacy module symbol dropdowns are replaced centrally with the same
+  // dynamic market selector. This keeps every module synchronized without per-page lists.
+  useEffect(() => {
+    const roots = new Map<HTMLSelectElement, { root: Root; host: HTMLDivElement; onChange: () => void }>();
+    const enhance = () => {
+      document.querySelectorAll<HTMLSelectElement>("select").forEach((select) => {
+        if (roots.has(select)) return;
+        const values = Array.from(select.options).map((option) => option.value.toUpperCase());
+        if (!(values.includes("BTCUSDT") && values.includes("ETHUSDT") && values.includes("SOLUSDT"))) return;
+        const host = document.createElement("div");
+        host.className = "mt-1 min-w-[190px]";
+        select.parentElement?.insertBefore(host, select);
+        select.style.display = "none";
+        const root = createRoot(host);
+        const onChange = () => {
+          root.render(<MarketSelector value={select.value || readGlobalMarket().symbol} onChange={choose} className="w-full" />);
+        };
+        const choose = (nextSymbol: string) => {
+          const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")?.set;
+          setter?.call(select, nextSymbol);
+          select.dispatchEvent(new Event("input", { bubbles: true }));
+          select.dispatchEvent(new Event("change", { bubbles: true }));
+          writeGlobalMarket(nextSymbol);
+          window.dispatchEvent(new CustomEvent(MARKET_CONTEXT_EVENT, { detail: { symbol: nextSymbol } }));
+        };
+        root.render(<MarketSelector value={select.value || readGlobalMarket().symbol} onChange={choose} className="w-full" />);
+        select.addEventListener("change", onChange);
+        roots.set(select, { root, host, onChange });
+      });
+      roots.forEach((entry, select) => { if (!document.body.contains(select)) { select.removeEventListener("change", entry.onChange); entry.root.unmount(); entry.host.remove(); roots.delete(select); } });
+    };
+    enhance();
+    const observer = new MutationObserver(enhance);
+    observer.observe(document.body, { childList: true, subtree: true });
+    const timer = window.setTimeout(enhance, 50);
+    return () => { window.clearTimeout(timer); observer.disconnect(); roots.forEach((entry, select) => { select.removeEventListener("change", entry.onChange); entry.root.unmount(); entry.host.remove(); }); roots.clear(); };
+  }, [pathname]);
+
   useEffect(() => { let alive = true; Promise.all([fetch("/api/backend/api/v1/admin/session", { cache: "no-store", credentials: "include" }), fetch("/api/backend/api/v1/auth/me", { cache: "no-store", credentials: "include" })]).then(async ([adminResponse, userResponse]) => { const admin = await adminResponse.json().catch(() => ({})); const user = await userResponse.json().catch(() => ({})); if (!alive) return; setOwner(admin?.authenticated === true && admin?.owner === true); setPermissions(Array.isArray(user?.permissions) ? user.permissions : []); }).catch(() => { if (alive) { setOwner(false); setPermissions([]); } }); return () => { alive = false; }; }, [pathname]);
   useEffect(() => { let alive = true; const refresh = () => { let stored: string[] = []; try { const raw = JSON.parse(localStorage.getItem("market-memory-watchlist") || "[]"); if (Array.isArray(raw)) stored = raw.filter((item): item is string => typeof item === "string"); } catch { stored = []; } const merged = Array.from(new Set([...stored, ...selectedSymbols, ...(globalSymbol ? [globalSymbol] : [])])).filter(Boolean).slice(0, 20); if (!merged.length) { setWatchlistItems([]); return; } const params = new URLSearchParams({ symbols: merged.join(","), limit: String(merged.length) }); fetch(`/api/backend/api/v1/instruments?${params.toString()}`, { credentials: "include", cache: "no-store" }).then((response) => response.ok ? response.json() : null).then((payload) => { if (!alive) return; const rows: InstrumentRow[] = Array.isArray(payload?.instruments) ? payload.instruments : []; setWatchlistItems(rows.map((row) => ({ symbol: row.symbol, name: row.base_asset || row.symbol }))); }).catch(() => { if (alive) setWatchlistItems([]); }); }; refresh(); window.addEventListener("storage", refresh); window.addEventListener(MARKET_CONTEXT_EVENT, refresh); return () => { alive = false; window.removeEventListener("storage", refresh); window.removeEventListener(MARKET_CONTEXT_EVENT, refresh); }; }, [selectedSymbols, globalSymbol]);
 
