@@ -1,34 +1,39 @@
-from dataclasses import asdict
+from dataclasses import dataclass
 
 import httpx
 
-from market_data.instruments import InstrumentInfo
+
+@dataclass(frozen=True)
+class BinanceInstrument:
+    symbol: str
+    base_asset: str
+    quote_asset: str
+    status: str
+    is_spot_trading_allowed: bool
 
 
 class BinanceInstrumentProvider:
-    """Read public Binance spot exchange metadata."""
-
     BASE_URL = "https://data-api.binance.vision"
 
-    def get_instruments(self) -> list[InstrumentInfo]:
-        response = httpx.get(
-            f"{self.BASE_URL}/api/v3/exchangeInfo",
-            timeout=30.0,
-        )
-        response.raise_for_status()
-        payload = response.json()
+    def list_spot_instruments(self) -> list[BinanceInstrument]:
+        with httpx.Client(timeout=30.0) as client:
+            response = client.get(f"{self.BASE_URL}/api/v3/exchangeInfo")
+            response.raise_for_status()
+            payload = response.json()
 
-        result: list[InstrumentInfo] = []
-        for item in payload.get("symbols", []):
-            result.append(
-                InstrumentInfo(
-                    symbol=str(item["symbol"]).upper(),
-                    base_asset=str(item["baseAsset"]).upper(),
-                    quote_asset=str(item["quoteAsset"]).upper(),
-                    market_type="spot",
-                    status=str(item["status"]),
-                    exchange="binance",
-                    provider="binance",
-                )
-            )
+        symbols = payload.get("symbols")
+        if not isinstance(symbols, list):
+            raise RuntimeError("Unexpected Binance exchangeInfo response")
+
+        result: list[BinanceInstrument] = []
+        for item in symbols:
+            if not isinstance(item, dict):
+                continue
+            symbol = str(item.get("symbol") or "").upper()
+            base_asset = str(item.get("baseAsset") or "").upper()
+            quote_asset = str(item.get("quoteAsset") or "").upper()
+            status = str(item.get("status") or "UNKNOWN").upper()
+            if not symbol or not base_asset or not quote_asset:
+                continue
+            result.append(BinanceInstrument(symbol, base_asset, quote_asset, status, bool(item.get("isSpotTradingAllowed", False))))
         return result
