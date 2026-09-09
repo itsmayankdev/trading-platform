@@ -23,20 +23,26 @@ def build_match_diagnostics(
 ) -> dict:
     """Describe retrieval concentration without inventing a predictive score.
 
-    Temporal clusters are deliberately called clusters, not independent samples.
-    A new cluster begins after more than one pattern span without another match.
-    This is a transparent episode-separation heuristic, not a claim of statistical
-    independence.
+    Temporal clustering is an episode-separation heuristic. A new cluster begins
+    only after more than two pattern spans without another match. The resulting
+    clusters must not be interpreted as statistically independent samples.
     """
-    # Keep the existing two-pattern-span diagnostic contract. The clustering
-    # heuristic uses two spans to separate distinct market episodes while avoiding
-    # any implication that the resulting clusters are statistically independent.
+    # Preserve the established diagnostic contract: two pattern spans.
     cluster_gap = float(pattern_length * 2)
     if not starts or not scores or len(starts) != len(scores):
         return {
             "match_count": 0,
             "score": {"top": None, "median": None, "p25": None, "p75": None, "top_to_median": None},
-            "temporal": {"clusters": 0, "largest_cluster": 0, "cluster_sizes": [], "distinct_days": 0, "distinct_months": 0, "median_gap_candles": None, "nearest_gap_candles": None, "cluster_gap_candles": int(cluster_gap)},
+            "temporal": {
+                "clusters": 0,
+                "largest_cluster": 0,
+                "cluster_sizes": [],
+                "distinct_days": 0,
+                "distinct_months": 0,
+                "median_gap_candles": None,
+                "nearest_gap_candles": None,
+                "cluster_gap_candles": int(cluster_gap),
+            },
         }
 
     ordered = sorted(zip(starts, scores), key=lambda item: item[0])
