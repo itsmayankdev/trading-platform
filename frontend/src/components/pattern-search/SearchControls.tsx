@@ -16,11 +16,20 @@ type SearchControlsProps = {
   onTopKChange: (value: string) => void;
 };
 
-type Instrument = { symbol: string; base_asset: string; quote_asset: string; status: string; spot_trading_allowed: boolean };
+type Instrument = {
+  symbol: string;
+  base_asset: string;
+  quote_asset: string;
+  status: string;
+  spot_trading_allowed: boolean;
+  coverage?: Record<string, { candle_count: number; start_time: string | null; end_time: string | null }>;
+};
+
 const TIMEFRAMES = [{ value: "5m", label: "5m", detail: "5 minutes" }, { value: "15m", label: "15m", detail: "15 minutes" }, { value: "1h", label: "1H", detail: "1 hour" }];
 const PATTERN_LENGTHS = ["20", "30", "45", "60", "90"];
 const MATCH_COUNTS = ["5", "10", "20", "50"];
 const formatPrice = (value: number) => new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value);
+const formatCoverage = (count: number) => count >= 1_000_000 ? `${(count / 1_000_000).toFixed(1)}M` : count >= 1_000 ? `${Math.round(count / 1_000)}k` : String(count);
 
 function PillButton({ active, onClick, children, title }: { active: boolean; onClick: () => void; children: React.ReactNode; title?: string }) {
   return <button type="button" title={title} onClick={onClick} className={`h-8 shrink-0 rounded-md px-2.5 text-xs font-medium transition ${active ? "bg-white/[0.11] text-white ring-1 ring-white/[0.13]" : "text-white/45 hover:bg-white/[0.045] hover:text-white/80"}`}>{children}</button>;
@@ -69,14 +78,12 @@ export default function SearchControls({ symbol, timeframe, patternLength, topK,
   }, [marketFocused, marketQuery]);
 
   useEffect(() => () => requestRef.current?.abort(), []);
-
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if ((event.key === "/" || (event.ctrlKey && event.key.toLowerCase() === "k")) && !marketFocused) {
         const target = event.target as HTMLElement | null;
         if (target?.tagName === "INPUT" || target?.tagName === "TEXTAREA" || target?.tagName === "SELECT") return;
-        event.preventDefault();
-        searchRef.current?.focus();
+        event.preventDefault(); searchRef.current?.focus();
       }
       if (event.key === "Escape") { setMarketFocused(false); searchRef.current?.blur(); }
     };
@@ -96,15 +103,18 @@ export default function SearchControls({ symbol, timeframe, patternLength, topK,
           <input ref={searchRef} value={marketQuery} onChange={(event) => setMarketQuery(event.target.value)} onFocus={() => setMarketFocused(true)} onKeyDown={(event) => { if (event.key === "Enter" && best) selectSymbol(best.symbol); }} placeholder="Search Binance markets…" className="min-w-0 flex-1 bg-transparent text-xs font-medium text-white outline-none placeholder:text-white/28" aria-label="Search Binance markets" autoComplete="off" />
           {marketQuery ? <button type="button" onClick={() => { setMarketQuery(""); searchRef.current?.focus(); }} className="text-white/30 hover:text-white/70" aria-label="Clear market search"><X size={13} /></button> : <kbd className="hidden rounded border border-white/10 px-1.5 py-0.5 text-[9px] text-white/22 lg:block">/</kbd>}
         </div>
-        {marketFocused && <><button type="button" aria-label="Close market suggestions" className="fixed inset-0 -z-10 cursor-default" onClick={() => setMarketFocused(false)} /><div className="absolute left-0 top-[calc(100%+7px)] w-[min(360px,calc(100vw-24px))] overflow-hidden rounded-xl border border-white/[0.12] bg-[#0b0f15] p-1.5 shadow-2xl shadow-black/50">
+        {marketFocused && <><button type="button" aria-label="Close market suggestions" className="fixed inset-0 -z-10 cursor-default" onClick={() => setMarketFocused(false)} /><div className="absolute left-0 top-[calc(100%+7px)] w-[min(390px,calc(100vw-24px))] overflow-hidden rounded-xl border border-white/[0.12] bg-[#0b0f15] p-1.5 shadow-2xl shadow-black/50">
           <div className="flex items-center justify-between px-2 py-1.5"><span className="text-[9px] font-semibold uppercase tracking-[0.12em] text-white/25">Binance Spot Markets</span>{marketLoading && <span className="text-[9px] text-white/25">Searching…</span>}</div>
-          {ranked.length ? ranked.slice(0, 12).map((item, index) => <button key={item.symbol} type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => selectSymbol(item.symbol)} className="flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-left transition hover:bg-white/[0.055]">
-            <span className="min-w-0"><span className="font-semibold text-white">{item.base_asset}</span><span className="ml-2 text-xs text-white/40">/ {item.quote_asset}</span>{index === 0 && marketQuery.trim() && <span className="ml-2 text-[9px] text-emerald-400/70">Best match</span>}</span>
-            <span className="flex items-center gap-2"><span className="text-[9px] text-white/30">Listed</span>{item.symbol === symbol && <Check size={14} className="shrink-0 text-emerald-400" />}</span>
-          </button>) : <div className="px-2.5 py-4 text-xs text-white/35">{marketLoading ? "Finding markets…" : marketQuery ? "No matching Binance market." : "Type a symbol or coin name to search."}</div>}
+          {ranked.length ? ranked.slice(0, 12).map((item, index) => {
+            const coverage = item.coverage?.[timeframe];
+            return <button key={item.symbol} type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => selectSymbol(item.symbol)} className="flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-left transition hover:bg-white/[0.055]">
+              <span className="min-w-0"><span className="font-semibold text-white">{item.base_asset}</span><span className="ml-2 text-xs text-white/40">/ {item.quote_asset}</span>{index === 0 && marketQuery.trim() && <span className="ml-2 text-[9px] text-emerald-400/70">Best match</span>}</span>
+              <span className="flex shrink-0 items-center gap-2"><span className={`text-[9px] ${coverage ? "text-emerald-400/70" : "text-white/25"}`}>{coverage ? `${formatCoverage(coverage.candle_count)} ${timeframe}` : "No history"}</span>{item.symbol === symbol && <Check size={14} className="shrink-0 text-emerald-400" />}</span>
+            </button>;
+          }) : <div className="px-2.5 py-4 text-xs text-white/35">{marketLoading ? "Finding markets…" : marketQuery ? "No matching Binance market." : "Type a symbol or coin name to search."}</div>}
+          <div className="border-t border-white/[0.06] px-2.5 py-2 text-[9px] leading-4 text-white/25">Historical search requires candles for the selected timeframe. Coverage is shown per market.</div>
         </div></>}
       </div>
-
       <div className="flex h-9 shrink-0 items-center gap-2 rounded-lg border border-white/[0.08] bg-[#0b0f15] px-2.5"><span className="h-1.5 w-1.5 rounded-full bg-emerald-400" /><span className="font-mono text-xs font-semibold tabular-nums text-white/90">{liveQuote ? formatPrice(liveQuote.price) : "—"}</span>{liveQuote && <span className={`font-mono text-[10px] tabular-nums ${liveQuote.change >= 0 ? "text-emerald-400" : "text-rose-400"}`}>{liveQuote.change >= 0 ? "+" : ""}{liveQuote.change.toFixed(2)}%</span>}</div>
       <div className="hidden h-6 w-px shrink-0 bg-white/[0.08] sm:block" />
       <div className="flex h-9 shrink-0 items-center rounded-lg border border-white/[0.08] bg-[#0b0f15] p-0.5" aria-label="Timeframe">{TIMEFRAMES.map((item) => <PillButton key={item.value} active={timeframe === item.value} onClick={() => onTimeframeChange(item.value)} title={item.detail}>{item.label}</PillButton>)}</div>
