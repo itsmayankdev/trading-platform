@@ -23,10 +23,6 @@ _CACHE_MAX_ENTRIES = 16
 _CACHE_TTL_SECONDS = 30.0
 _RESULT_CACHE_MAX_ENTRIES = 12
 _RESULT_CACHE_TTL_SECONDS = 10.0
-# V1 remains the fast candidate generator. Production V3 then re-ranks a broad
-# candidate pool using complete OHLCV structure. This two-stage design avoids a
-# full structural scan of years of minute data while preventing close-path-only
-# similarity from deciding the final matches.
 _CANDIDATE_POOL_MIN = 200
 _CANDIDATE_POOL_MULTIPLIER = 20
 _CANDIDATE_POOL_MAX = 500
@@ -54,29 +50,16 @@ def _cached_numerical_rows(instrument_id: int, timeframe: str) -> tuple[tuple, b
             cached = _NUMERICAL_CACHE.get(key)
             if cached is not None:
                 cached_at, cached_timestamp, cached_close, cached_rows = cached
-                if (
-                    now - cached_at <= _CACHE_TTL_SECONDS
-                    and cached_timestamp == latest_timestamp
-                    and cached_close == latest_close
-                ):
+                if now - cached_at <= _CACHE_TTL_SECONDS and cached_timestamp == latest_timestamp and cached_close == latest_close:
                     _NUMERICAL_CACHE.move_to_end(key)
                     return cached_rows, True
 
         rows = tuple(
             db.execute(
-                select(
-                    Candle.timestamp,
-                    Candle.open,
-                    Candle.high,
-                    Candle.low,
-                    Candle.close,
-                    Candle.volume,
-                )
+                select(Candle.timestamp, Candle.open, Candle.high, Candle.low, Candle.close, Candle.volume)
                 .where(Candle.instrument_id == instrument_id, Candle.timeframe == timeframe)
                 .order_by(Candle.timestamp.asc())
             ).all()
-        )
-
         with _CACHE_LOCK:
             _NUMERICAL_CACHE[key] = (now, latest_timestamp, latest_close, rows)
             _NUMERICAL_CACHE.move_to_end(key)
@@ -92,11 +75,7 @@ def _get_cached_result(key: tuple[int, str, int, int], latest_timestamp, latest_
         if cached is None:
             return None
         cached_at, cached_timestamp, cached_close, response = cached
-        if (
-            now - cached_at > _RESULT_CACHE_TTL_SECONDS
-            or cached_timestamp != latest_timestamp
-            or cached_close != latest_close
-        ):
+        if now - cached_at > _RESULT_CACHE_TTL_SECONDS or cached_timestamp != latest_timestamp or cached_close != latest_close:
             _RESULT_CACHE.pop(key, None)
             return None
         _RESULT_CACHE.move_to_end(key)
@@ -121,14 +100,7 @@ def _window_from_rows(symbol: str, timeframe: str, rows, start_index: int, lengt
         start_time=selected[0].timestamp,
         end_time=selected[-1].timestamp,
         candles=tuple(
-            CandlePoint(
-                timestamp=row.timestamp,
-                open=row.open,
-                high=row.high,
-                low=row.low,
-                close=row.close,
-                volume=row.volume,
-            )
+            CandlePoint(timestamp=row.timestamp, open=row.open, high=row.high, low=row.low, close=row.close, volume=row.volume)
             for row in selected
         ),
     )
@@ -165,14 +137,7 @@ class PatternSearchService:
 
         started = time.perf_counter()
         current_candles = [
-            CandlePoint(
-                timestamp=row.timestamp,
-                open=row.open,
-                high=row.high,
-                low=row.low,
-                close=row.close,
-                volume=row.volume,
-            )
+            CandlePoint(timestamp=row.timestamp, open=row.open, high=row.high, low=row.low, close=row.close, volume=row.volume)
             for row in rows[-pattern_length:]
         ]
         current = PatternWindow(
@@ -185,40 +150,29 @@ class PatternSearchService:
         mark("current_pattern", started)
 
         started = time.perf_counter()
-        store = NumericalWindowStore.from_columns(
-            timestamps=timestamps,
-            closes=closes,
-            window_length=pattern_length,
-        )
+        store = NumericalWindowStore.from_columns(timestamps=timestamps, closes=closes, window_length=pattern_length)
         mark("numerical_store", started)
 
         started = time.perf_counter()
         production_ranker = PatternRanker()
         retrieval_ranker = PatternRanker("similarity_v1")
-        candidate_pool = min(
-            _CANDIDATE_POOL_MAX,
-            max(_CANDIDATE_POOL_MIN, top_k * _CANDIDATE_POOL_MULTIPLIER),
-        )
+        candidate_pool = min(_CANDIDATE_POOL_MAX, max(_CANDIDATE_POOL_MIN, top_k * _CANDIDATE_POOL_MULTIPLIER))
         candidates = retrieval_ranker.rank_numerical_v1(
             current=current,
             store=store,
             top_k=candidate_pool,
-            min_separation_candles=pattern_length,
+            # Candidate generation must stay broad. Diversity/separation is
+            # applied only after the structural V3 re-rank.
+            min_separation_candles=0,
         )
 
-        # Rebuild only the broad candidate pool with full OHLCV data, then let
-        # production V3 perform the final structural ranking and separation.
         candidate_windows = []
-        candidate_matches = []
         for candidate in candidates:
             start_index = timestamp_to_index.get(candidate.start_time)
             if start_index is None:
                 continue
             try:
-                candidate_windows.append(
-                    _window_from_rows(symbol, timeframe, rows, start_index, pattern_length)
-                )
-                candidate_matches.append(candidate)
+                candidate_windows.append(_window_from_rows(symbol, timeframe, rows, start_index, pattern_length))
             except ValueError:
                 continue
 
@@ -230,7 +184,6 @@ class PatternSearchService:
         )
         mark("candidate_retrieval_and_structural_ranking", started)
 
-        # Index final ranked windows by their start time for exact result lookup.
         match_windows = {window.start_time: window for window in candidate_windows}
 
         started = time.perf_counter()
@@ -239,27 +192,14 @@ class PatternSearchService:
         all_outcomes = []
         max_horizon = 60
 
-        # Reuse the already-loaded OHLCV rows for every winning window. This
-        # eliminates the previous N+1 database-query pattern without changing
-        # outcome calculations or their high/low inputs.
         for match_index, match in enumerate(matches, start=1):
             start_index = timestamp_to_index[match.start_time]
             future_end_index = min(start_index + pattern_length + max_horizon - 1, len(rows) - 1)
-            matched_rows = rows[start_index : start_index + pattern_length]
             future_rows = rows[start_index + pattern_length : future_end_index + 1]
-            matched_window = match_windows.get(match.start_time)
-            if matched_window is None:
-                matched_window = _window_from_rows(symbol, timeframe, rows, start_index, pattern_length)
+            matched_window = match_windows[match.start_time]
 
             future = [
-                CandlePoint(
-                    timestamp=row.timestamp,
-                    open=row.open,
-                    high=row.high,
-                    low=row.low,
-                    close=row.close,
-                    volume=row.volume,
-                )
+                CandlePoint(timestamp=row.timestamp, open=row.open, high=row.high, low=row.low, close=row.close, volume=row.volume)
                 for row in future_rows
             ]
             outcomes = calculate_outcomes(match=matched_window, future_candles=future)
@@ -267,10 +207,7 @@ class PatternSearchService:
 
             entry_close = matched_window.candles[-1].close
             path_values = [0.0]
-            path_values.extend(
-                (row.close / entry_close - 1.0) if entry_close else 0.0
-                for row in future_rows
-            )
+            path_values.extend((row.close / entry_close - 1.0) if entry_close else 0.0 for row in future_rows)
             forward_paths.append({
                 "match_index": match_index,
                 "similarity_score": round(match.similarity_score * 100, 4),
@@ -282,12 +219,7 @@ class PatternSearchService:
                 "end_time": match.end_time,
                 "similarity_score": round(match.similarity_score * 100, 4),
                 "outcomes": [
-                    {
-                        "horizon_candles": outcome.horizon_candles,
-                        "forward_return": outcome.forward_return,
-                        "mfe": outcome.mfe,
-                        "mae": outcome.mae,
-                    }
+                    {"horizon_candles": outcome.horizon_candles, "forward_return": outcome.forward_return, "mfe": outcome.mfe, "mae": outcome.mae}
                     for outcome in outcomes
                 ],
             })
@@ -318,15 +250,7 @@ class PatternSearchService:
             "current_pattern": {"start_time": current.start_time, "end_time": current.end_time},
             "matches": match_results,
             "statistics": [
-                {
-                    "horizon_candles": stat.horizon_candles,
-                    "sample_size": stat.sample_size,
-                    "mean_return": stat.mean_return,
-                    "median_return": stat.median_return,
-                    "win_rate": stat.win_rate,
-                    "mean_mfe": stat.mean_mfe,
-                    "mean_mae": stat.mean_mae,
-                }
+                {"horizon_candles": stat.horizon_candles, "sample_size": stat.sample_size, "mean_return": stat.mean_return, "median_return": stat.median_return, "win_rate": stat.win_rate, "mean_mfe": stat.mean_mfe, "mean_mae": stat.mean_mae}
                 for stat in statistics
             ],
             "forward_paths": forward_paths,
