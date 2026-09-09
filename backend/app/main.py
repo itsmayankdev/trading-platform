@@ -1,6 +1,8 @@
 from contextlib import asynccontextmanager
+import time
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import Response
 
 from backend.app.api.routes.search import router as search_router
 from backend.app.api.routes.candles import router as candles_router
@@ -13,6 +15,7 @@ from backend.app.api.routes.telemetry import router as telemetry_router
 from backend.app.api.routes.instruments import router as instruments_router
 from backend.app.api.routes.quote import router as quote_router
 from backend.app.api.routes.global_markets import router as global_markets_router
+from backend.app.core.performance import performance_debug_enabled
 from backend.app.db.init_db import init_db
 from workers.ingestion.instrument_registry import InstrumentRegistrySync
 
@@ -29,6 +32,31 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Trading Platform API", version="0.5.0", docs_url="/docs", redoc_url="/redoc", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def request_performance_middleware(request: Request, call_next):
+    started = time.perf_counter()
+    response: Response
+    try:
+        response = await call_next(request)
+    except Exception:
+        duration_ms = (time.perf_counter() - started) * 1000
+        if performance_debug_enabled():
+            print(f"PERF_HTTP method={request.method} path={request.url.path} status=500 duration={duration_ms:.1f}ms", flush=True)
+        raise
+
+    duration_ms = (time.perf_counter() - started) * 1000
+    if performance_debug_enabled():
+        response.headers["Server-Timing"] = f"app;dur={duration_ms:.1f}"
+        print(
+            f"PERF_HTTP method={request.method} path={request.url.path} "
+            f"status={response.status_code} duration={duration_ms:.1f}ms",
+            flush=True,
+        )
+    return response
+
+
 app.include_router(auth_router)
 app.include_router(telemetry_router)
 app.include_router(instruments_router)
