@@ -10,3 +10,4 @@ polars==1.44.1
 numpy==2.5.3
 redis==8.1.0
 PyYAML==6.0.3
+yfinance==1.7.0
