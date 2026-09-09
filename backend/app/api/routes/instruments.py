@@ -18,12 +18,11 @@ def list_instruments(request: Request, search: str = Query(default="", max_lengt
     stmt = select(Instrument).where(
         Instrument.exchange == "binance",
         Instrument.provider == "binance",
-        Instrument.is_enabled.is_(True),
         Instrument.is_listed.is_(True),
         Instrument.is_spot_trading_allowed.is_(True),
     )
     if status.upper() != "ALL":
-        stmt = stmt.where(Instrument.market_status == status.upper())
+        stmt = stmt.where(Instrument.exchange_status == status.upper())
     if quote_asset:
         stmt = stmt.where(Instrument.quote_asset == quote_asset.upper())
     if q:
@@ -33,7 +32,7 @@ def list_instruments(request: Request, search: str = Query(default="", max_lengt
     else:
         stmt = stmt.order_by(Instrument.quote_asset, Instrument.base_asset, Instrument.symbol)
     rows = db.execute(stmt.offset(offset).limit(limit)).scalars().all()
-    return {"count": len(rows), "offset": offset, "limit": limit, "instruments": [{"symbol": row.symbol, "base_asset": row.base_asset, "quote_asset": row.quote_asset, "status": row.market_status, "spot_trading_allowed": row.is_spot_trading_allowed} for row in rows]}
+    return {"count": len(rows), "offset": offset, "limit": limit, "instruments": [{"symbol": row.symbol, "base_asset": row.base_asset, "quote_asset": row.quote_asset, "status": row.exchange_status or row.market_status, "spot_trading_allowed": row.is_spot_trading_allowed} for row in rows]}
 
 
 @router.post("/instruments/sync")
