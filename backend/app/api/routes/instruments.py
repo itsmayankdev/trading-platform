@@ -42,23 +42,57 @@ def list_instruments(
     if q:
         pattern = f"%{q}%"
         stmt = stmt.where(or_(Instrument.symbol.ilike(pattern), Instrument.base_asset.ilike(pattern), Instrument.quote_asset.ilike(pattern)))
-        stmt = stmt.order_by(case((Instrument.symbol == q, 0), (Instrument.base_asset == q, 1), else_=2), Instrument.symbol)
     elif requested_symbols:
         stmt = stmt.order_by(case(*[(Instrument.symbol == symbol, index) for index, symbol in enumerate(requested_symbols)], else_=len(requested_symbols)))
     else:
         stmt = stmt.order_by(Instrument.quote_asset, Instrument.base_asset, Instrument.symbol)
 
     ticker_map: dict[str, float] = {}
-    if sort.lower() == "volume":
-        candidates = db.execute(stmt).scalars().all()
+    candidates = db.execute(stmt).scalars().all()
+    if q or sort.lower() == "volume":
         try:
-            ticker_map = {ticker.symbol: ticker.quote_volume for ticker in BinanceTickerProvider().get_24h_tickers()}
+            ticker_map = {ticker.symbol: float(ticker.quote_volume) for ticker in BinanceTickerProvider().get_24h_tickers()}
         except Exception:
             ticker_map = {}
-        candidates.sort(key=lambda row: ticker_map.get(row.symbol, 0.0), reverse=True)
+
+    def relevance(row: Instrument) -> int:
+        if not q:
+            return 0
+        symbol = (row.symbol or "").upper()
+        base = (row.base_asset or "").upper()
+        quote = (row.quote_asset or "").upper()
+        if symbol == q:
+            return 0
+        if base == q:
+            return 1
+        if symbol.startswith(q):
+            return 2
+        if base.startswith(q):
+            return 3
+        if q in symbol:
+            return 4
+        if q in base:
+            return 5
+        if q in quote:
+            return 6
+        return 7
+
+    # One market per base asset: for ETH, BTC, etc. keep the best matching/liquid
+    # Binance Spot pair instead of flooding autocomplete with ETHUSDT/ETHUSDC/ETHBTC.
+    if q or sort.lower() == "volume":
+        candidates.sort(key=lambda row: (relevance(row), -ticker_map.get(row.symbol, 0.0), row.symbol))
+        unique: list[Instrument] = []
+        seen_bases: set[str] = set()
+        for row in candidates:
+            base = (row.base_asset or row.symbol).upper()
+            if base in seen_bases:
+                continue
+            seen_bases.add(base)
+            unique.append(row)
+        candidates = unique
         rows = candidates[offset: offset + limit]
     else:
-        rows = db.execute(stmt.offset(offset).limit(limit)).scalars().all()
+        rows = candidates[offset: offset + limit]
 
     if not rows:
         return {"count": 0, "offset": offset, "limit": limit, "sort": sort, "instruments": []}
