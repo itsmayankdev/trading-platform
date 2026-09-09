@@ -29,10 +29,56 @@ def _get_ticker_map() -> dict[str, float]:
         _ticker_cache = {ticker.symbol: float(ticker.quote_volume) for ticker in BinanceTickerProvider().get_24h_tickers()}
         _ticker_cache_at = now
     except Exception:
-        # Keep the last good snapshot when Binance is temporarily unavailable.
         if not _ticker_cache:
             _ticker_cache = {}
     return _ticker_cache
+
+
+def _relevance(row: Instrument, query: str) -> int:
+    symbol = (row.symbol or "").upper()
+    base = (row.base_asset or "").upper()
+    quote = (row.quote_asset or "").upper()
+    if symbol == query:
+        return 0
+    if base == query:
+        return 1
+    if symbol.startswith(query):
+        return 2
+    if base.startswith(query):
+        return 3
+    if query in symbol:
+        return 4
+    if query in base:
+        return 5
+    if query in quote:
+        return 6
+    return 7
+
+
+def _rank_and_dedupe(rows: list[Instrument], ticker_map: dict[str, float], query: str = "") -> list[Instrument]:
+    if not rows:
+        return []
+    if query:
+        # If the user searched for ETH, prefer ETH as the base asset. Quote-only
+        # markets such as BTC/ETH are not useful autocomplete results when a
+        # direct ETH market exists.
+        direct = [row for row in rows if query in (row.symbol or "").upper() or query in (row.base_asset or "").upper()]
+        if direct:
+            rows = direct
+    rows.sort(key=lambda row: (_relevance(row, query) if query else 0, -ticker_map.get(row.symbol, 0.0), row.symbol))
+    unique: list[Instrument] = []
+    seen_bases: set[str] = set()
+    for row in rows:
+        base = (row.base_asset or row.symbol or "").upper()
+        if not base or base in seen_bases:
+            continue
+        seen_bases.add(base)
+        unique.append(row)
+    if query:
+        unique.sort(key=lambda row: (_relevance(row, query), -ticker_map.get(row.symbol, 0.0), row.symbol))
+    else:
+        unique.sort(key=lambda row: (-ticker_map.get(row.symbol, 0.0), row.symbol))
+    return unique
 
 
 @router.get("/instruments")
@@ -70,45 +116,9 @@ def list_instruments(
     candidates = db.execute(stmt).scalars().all()
     if q or sort.lower() == "volume":
         ticker_map = _get_ticker_map()
+        candidates = _rank_and_dedupe(candidates, ticker_map, q)
 
-    def relevance(row: Instrument) -> int:
-        if not q:
-            return 0
-        symbol = (row.symbol or "").upper()
-        base = (row.base_asset or "").upper()
-        quote = (row.quote_asset or "").upper()
-        if symbol == q:
-            return 0
-        if base == q:
-            return 1
-        if symbol.startswith(q):
-            return 2
-        if base.startswith(q):
-            return 3
-        if q in symbol:
-            return 4
-        if q in base:
-            return 5
-        if q in quote:
-            return 6
-        return 7
-
-    # One market per base asset. For ETH, BTC, etc. keep the best matching and
-    # most liquid Binance Spot pair instead of flooding autocomplete with variants.
-    if q or sort.lower() == "volume":
-        candidates.sort(key=lambda row: (relevance(row), -ticker_map.get(row.symbol, 0.0), row.symbol))
-        unique: list[Instrument] = []
-        seen_bases: set[str] = set()
-        for row in candidates:
-            base = (row.base_asset or row.symbol).upper()
-            if base in seen_bases:
-                continue
-            seen_bases.add(base)
-            unique.append(row)
-        candidates = unique
-        rows = candidates[offset: offset + limit]
-    else:
-        rows = candidates[offset: offset + limit]
+    rows = candidates[offset: offset + limit]
 
     if not rows:
         return {"count": 0, "offset": offset, "limit": limit, "sort": sort, "instruments": []}
