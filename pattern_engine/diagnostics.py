@@ -24,7 +24,7 @@ def build_match_diagnostics(
     """Describe retrieval concentration without inventing a predictive score.
 
     Temporal clusters are deliberately called clusters, not independent samples.
-    A new cluster begins after more than 2 pattern spans without another match.
+    A new cluster begins after more than one pattern span without another match.
     This is a transparent episode-separation heuristic, not a claim of statistical
     independence.
     """
@@ -32,7 +32,7 @@ def build_match_diagnostics(
         return {
             "match_count": 0,
             "score": {"top": None, "median": None, "p25": None, "p75": None, "top_to_median": None},
-            "temporal": {"clusters": 0, "largest_cluster": 0, "cluster_sizes": [], "distinct_days": 0, "distinct_months": 0, "median_gap_candles": None, "nearest_gap_candles": None, "cluster_gap_candles": pattern_length * 2},
+            "temporal": {"clusters": 0, "largest_cluster": 0, "cluster_sizes": [], "distinct_days": 0, "distinct_months": 0, "median_gap_candles": None, "nearest_gap_candles": None, "cluster_gap_candles": pattern_length},
         }
 
     ordered = sorted(zip(starts, scores), key=lambda item: item[0])
@@ -43,7 +43,9 @@ def build_match_diagnostics(
         for a, b in zip(ordered_starts, ordered_starts[1:])
     ]
 
-    cluster_gap = float(pattern_length * 2)
+    # One pattern span is the natural episode width: matches within that span
+    # are treated as the same market episode; a larger gap starts a new episode.
+    cluster_gap = float(pattern_length)
     cluster_sizes: list[int] = []
     current_size = 1
     for gap in gaps_candles:
