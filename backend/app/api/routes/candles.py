@@ -16,7 +16,15 @@ instrument_repository = InstrumentRepository()
 
 
 @router.get("/candles")
-def get_candles(request: Request, symbol: str = Query(default="ETHUSDT", min_length=1, max_length=50), timeframe: str = Query(default="5m", min_length=1, max_length=10), limit: int = Query(default=500, ge=1, le=5000), start_time: datetime | None = Query(default=None), end_time: datetime | None = Query(default=None), db: Session = Depends(get_db)):
+def get_candles(
+    request: Request,
+    symbol: str = Query(default="ETHUSDT", min_length=1, max_length=50),
+    timeframe: str = Query(default="5m", min_length=1, max_length=10),
+    limit: int = Query(default=500, ge=1, le=5000),
+    start_time: datetime | None = Query(default=None),
+    end_time: datetime | None = Query(default=None),
+    db: Session = Depends(get_db),
+):
     user = require_user(request, db)
     require_permission(user, "market_memory.view")
     symbol, timeframe = symbol.upper(), timeframe.lower()
@@ -27,29 +35,92 @@ def get_candles(request: Request, symbol: str = Query(default="ETHUSDT", min_len
         raise HTTPException(status_code=404, detail=f"Instrument not found: {symbol}")
 
     try:
-        # A plain candles request is the live chart path. Refresh only the
-        # currently forming Binance candle so the chart follows the live quote.
-        # Historical match requests always include a bounded start/end range,
-        # so they remain immutable historical data and do not incur this call.
+        # Live chart requests have no time bounds. Refresh only the currently
+        # forming Binance candle so the live chart follows the live quote.
         if start_time is None and end_time is None and instrument.provider == "binance":
             refresh_latest_market_candle(symbol=symbol, timeframe=timeframe)
 
-        existing = candle_repository.get_candles(db=db, instrument_id=instrument.id, timeframe=timeframe, limit=1000)
-        if len(existing) < min(limit, 1000):
+        # Historical requests are bounded and immutable. Query the requested
+        # window first so a small match chart never scans the latest 1000 rows
+        # just to decide whether its bounded data already exists.
+        candles = candle_repository.get_candles(
+            db=db,
+            instrument_id=instrument.id,
+            timeframe=timeframe,
+            limit=limit,
+            start_time=start_time,
+            end_time=end_time,
+        )
+        required = min(limit, 1000)
+        if len(candles) < required:
             db.expire_all()
             if instrument.provider == "yahoo":
-                ensure_yahoo_market_data(symbol=symbol, timeframe=timeframe, minimum_candles=min(limit, 1000))
-            elif instrument.exchange == "binance" and instrument.provider == "binance" and instrument.is_listed and instrument.is_spot_trading_allowed:
-                ensure_market_data(symbol=symbol, timeframe=timeframe, minimum_candles=min(limit, 1000))
+                ensure_yahoo_market_data(
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    minimum_candles=required,
+                )
+            elif (
+                instrument.exchange == "binance"
+                and instrument.provider == "binance"
+                and instrument.is_listed
+                and instrument.is_spot_trading_allowed
+            ):
+                ensure_market_data(
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    minimum_candles=required,
+                )
             else:
-                raise HTTPException(status_code=400, detail=f"Unsupported market provider: {instrument.provider}")
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Unsupported market provider: {instrument.provider}",
+                )
+            db.expire_all()
+            candles = candle_repository.get_candles(
+                db=db,
+                instrument_id=instrument.id,
+                timeframe=timeframe,
+                limit=limit,
+                start_time=start_time,
+                end_time=end_time,
+            )
     except HTTPException:
         raise
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         print(f"On-demand candle warmup skipped for {symbol} {timeframe}: {exc}", flush=True)
+        candles = candle_repository.get_candles(
+            db=db,
+            instrument_id=instrument.id,
+            timeframe=timeframe,
+            limit=limit,
+            start_time=start_time,
+            end_time=end_time,
+        )
 
-    candles = candle_repository.get_candles(db=db, instrument_id=instrument.id, timeframe=timeframe, limit=limit, start_time=start_time, end_time=end_time)
-    available_start, available_end = candle_repository.get_time_range(db=db, instrument_id=instrument.id, timeframe=timeframe)
-    return {"symbol": symbol, "timeframe": timeframe, "count": len(candles), "available_start_time": available_start.isoformat() if available_start else None, "available_end_time": available_end.isoformat() if available_end else None, "provider": instrument.provider, "candles": [{"time": int(c.timestamp.timestamp()), "open": c.open, "high": c.high, "low": c.low, "close": c.close, "volume": c.volume} for c in candles]}
+    available_start, available_end = candle_repository.get_time_range(
+        db=db,
+        instrument_id=instrument.id,
+        timeframe=timeframe,
+    )
+    return {
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "count": len(candles),
+        "available_start_time": available_start.isoformat() if available_start else None,
+        "available_end_time": available_end.isoformat() if available_end else None,
+        "provider": instrument.provider,
+        "candles": [
+            {
+                "time": int(c.timestamp.timestamp()),
+                "open": c.open,
+                "high": c.high,
+                "low": c.low,
+                "close": c.close,
+                "volume": c.volume,
+            }
+            for c in candles
+        ],
+    }
