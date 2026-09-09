@@ -12,17 +12,15 @@ from backend.app.api.routes.auth import router as auth_router
 from backend.app.api.routes.telemetry import router as telemetry_router
 from backend.app.api.routes.instruments import router as instruments_router
 from backend.app.db.init_db import init_db
-from backend.app.db.session import SessionLocal
-from backend.app.services.instrument_sync import InstrumentSyncService
+from workers.ingestion.instrument_registry import InstrumentRegistrySync
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
     try:
-        with SessionLocal() as db:
-            result = InstrumentSyncService().sync_binance_spot(db)
-            print(f"Binance instrument sync: {result}")
+        result = InstrumentRegistrySync().sync()
+        print(f"Binance instrument sync: {result}")
     except Exception as exc:
         print(f"Binance instrument sync skipped: {exc}")
     yield
