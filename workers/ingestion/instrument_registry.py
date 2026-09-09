@@ -28,18 +28,23 @@ class InstrumentRegistrySync:
                         INSERT INTO instruments
                             (symbol, asset_class, exchange, provider,
                              base_asset, quote_asset, market_type,
-                             exchange_status, is_enabled, discovered_at, last_seen_at)
+                             exchange_status, is_enabled, discovered_at, last_seen_at,
+                             market_status, is_spot_trading_allowed, is_listed)
                         VALUES
                             (:symbol, 'crypto', 'binance', 'binance',
                              :base_asset, :quote_asset, :market_type,
-                             :status, :enabled, :now, :now)
+                             :status, :enabled, :now, :now,
+                             :status, TRUE, TRUE)
                         ON CONFLICT (symbol) DO UPDATE SET
                             base_asset = EXCLUDED.base_asset,
                             quote_asset = EXCLUDED.quote_asset,
                             market_type = EXCLUDED.market_type,
                             exchange_status = EXCLUDED.exchange_status,
                             is_enabled = EXCLUDED.is_enabled,
-                            last_seen_at = EXCLUDED.last_seen_at
+                            last_seen_at = EXCLUDED.last_seen_at,
+                            market_status = EXCLUDED.market_status,
+                            is_spot_trading_allowed = TRUE,
+                            is_listed = TRUE
                         """
                     ),
                     {
@@ -53,14 +58,26 @@ class InstrumentRegistrySync:
                     },
                 )
 
-            # Anything no longer returned by the exchange is disabled rather
-            # than deleted, preserving historical references and auditability.
-            seen_symbols = [item.symbol for item in discovered]
-            if seen_symbols:
+            db.execute(
+                text(
+                    """
+                    UPDATE instruments
+                    SET is_listed = FALSE,
+                        market_status = 'REMOVED'
+                    WHERE exchange = 'binance'
+                      AND provider = 'binance'
+                      AND last_seen_at < :now
+                    """
+                ),
+                {"now": now},
+            )
+            # Re-assert current rows after the broad stale-row update above.
+            if discovered:
+                seen_symbols = [item.symbol for item in discovered]
                 db.execute(
                     text(
-                        "UPDATE instruments SET is_enabled = FALSE "
-                        "WHERE exchange = 'binance' AND symbol <> ALL(:symbols)"
+                        "UPDATE instruments SET is_listed = TRUE "
+                        "WHERE exchange = 'binance' AND symbol = ANY(:symbols)"
                     ),
                     {"symbols": seen_symbols},
                 )
