@@ -9,6 +9,7 @@ from backend.app.db.session import get_db
 from backend.app.models.admin import AdminUsageEvent
 from backend.app.models.candle import Candle
 from backend.app.models.instrument import Instrument
+from market_data.providers.binance_tickers import BinanceTickerProvider
 from market_data.timeframes.utils import TIMEFRAME_MINUTES
 from workers.ingestion.instrument_registry import InstrumentRegistrySync
 
@@ -22,6 +23,7 @@ def list_instruments(
     quote_asset: str | None = Query(default=None, max_length=30),
     status: str = Query(default="TRADING", max_length=30),
     symbols: str | None = Query(default=None, max_length=2000),
+    sort: str = Query(default="default", max_length=20),
     limit: int = Query(default=30, ge=1, le=100),
     offset: int = Query(default=0, ge=0, le=100000),
     db: Session = Depends(get_db),
@@ -45,18 +47,24 @@ def list_instruments(
     if q:
         pattern = f"%{q}%"
         stmt = stmt.where(or_(Instrument.symbol.ilike(pattern), Instrument.base_asset.ilike(pattern), Instrument.quote_asset.ilike(pattern)))
-        stmt = stmt.order_by(
-            case((Instrument.symbol == q, 0), (Instrument.base_asset == q, 1), else_=2),
-            Instrument.symbol,
-        )
+        stmt = stmt.order_by(case((Instrument.symbol == q, 0), (Instrument.base_asset == q, 1), else_=2), Instrument.symbol)
     elif requested_symbols:
         stmt = stmt.order_by(case(*[(Instrument.symbol == symbol, index) for index, symbol in enumerate(requested_symbols)], else_=len(requested_symbols)))
     else:
         stmt = stmt.order_by(Instrument.quote_asset, Instrument.base_asset, Instrument.symbol)
 
-    rows = db.execute(stmt.offset(offset).limit(limit)).scalars().all()
+    if sort.lower() == "volume":
+        # Volume ranking is intentionally provider-side rather than a frontend-maintained list.
+        # Only active Binance Spot instruments are eligible for the returned top set.
+        candidates = db.execute(stmt).scalars().all()
+        ticker_map = {ticker.symbol: ticker.quote_volume for ticker in BinanceTickerProvider().get_24h_tickers()}
+        candidates.sort(key=lambda row: ticker_map.get(row.symbol, 0.0), reverse=True)
+        rows = candidates[offset: offset + limit]
+    else:
+        rows = db.execute(stmt.offset(offset).limit(limit)).scalars().all()
+
     if not rows:
-        return {"count": 0, "offset": offset, "limit": limit, "instruments": []}
+        return {"count": 0, "offset": offset, "limit": limit, "sort": sort, "instruments": []}
 
     ids = [row.id for row in rows]
     coverage_rows = db.execute(
@@ -90,10 +98,21 @@ def list_instruments(
             "readiness": readiness,
         }
 
+    ticker_map = {}
+    if sort.lower() == "volume":
+        # The provider was already queried for ranking; this second small lookup is avoided by
+        # exposing volume only for the ranked request in a future cache layer.
+        # Keep response semantics explicit for the UI today.
+        try:
+            ticker_map = {ticker.symbol: ticker.quote_volume for ticker in BinanceTickerProvider().get_24h_tickers()}
+        except Exception:
+            ticker_map = {}
+
     return {
         "count": len(rows),
         "offset": offset,
         "limit": limit,
+        "sort": sort,
         "instruments": [
             {
                 "symbol": row.symbol,
@@ -101,6 +120,7 @@ def list_instruments(
                 "quote_asset": row.quote_asset,
                 "status": row.exchange_status or row.market_status,
                 "spot_trading_allowed": row.is_spot_trading_allowed,
+                "quote_volume_24h": ticker_map.get(row.symbol),
                 "coverage": coverage.get(row.id, {}),
             }
             for row in rows
