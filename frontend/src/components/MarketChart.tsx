@@ -9,7 +9,7 @@ type Candle = CachedCandle;
 type MarketChartProps = { symbol: string; timeframe: string; patternLength: number; highlightLocked: boolean; dashboardFullscreen: boolean; onFullscreenToggle: () => void; onPin?: () => void };
 const numberFormatter = new Intl.NumberFormat("en-US", { maximumFractionDigits: 4 });
 const candleTimeFormatter = new Intl.DateTimeFormat("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "UTC" });
-const LIVE_REFRESH_MS = 10_000;
+const LIVE_REFRESH_MS = 5_000;
 const LIVE_CONTEXT_CANDLES = 30;
 
 function positionPatternBox(chart: IChartApi, box: HTMLDivElement, candles: Candle[], patternLength: number) {
@@ -21,6 +21,11 @@ function positionPatternBox(chart: IChartApi, box: HTMLDivElement, candles: Cand
   if (left == null || right == null) return;
   box.style.left = `${Math.max(0, Math.min(left, right) - 4)}px`;
   box.style.width = `${Math.max(14, Math.abs(right - left) + 8)}px`;
+}
+
+function positionPatternBoxSoon(chart: IChartApi, box: HTMLDivElement, candles: Candle[], patternLength: number) {
+  positionPatternBox(chart, box, candles, patternLength);
+  window.requestAnimationFrame(() => positionPatternBox(chart, box, candles, patternLength));
 }
 
 function formatNumber(value: number) { return numberFormatter.format(value); }
@@ -40,7 +45,7 @@ export default function MarketChart({ symbol, timeframe, patternLength, highligh
   patternLengthRef.current = patternLength;
 
   function hideTooltip() { if (tooltipRef.current) tooltipRef.current.style.opacity = "0"; }
-  function fitChart() { chartRef.current?.timeScale().fitContent(); if (chartRef.current && patternBoxRef.current) positionPatternBox(chartRef.current, patternBoxRef.current, candlesRef.current, patternLengthRef.current); hideTooltip(); }
+  function fitChart() { chartRef.current?.timeScale().fitContent(); if (chartRef.current && patternBoxRef.current) positionPatternBoxSoon(chartRef.current, patternBoxRef.current, candlesRef.current, patternLengthRef.current); hideTooltip(); }
 
   useEffect(() => {
     const container = containerRef.current;
@@ -72,7 +77,7 @@ export default function MarketChart({ symbol, timeframe, patternLength, highligh
     const resizeObserver = new ResizeObserver(() => {
       if (disposed) return;
       chart.applyOptions({ width: host.clientWidth, height: Math.max(300, host.clientHeight) });
-      if (patternBoxRef.current) positionPatternBox(chart, patternBoxRef.current, candlesRef.current, patternLengthRef.current);
+      if (patternBoxRef.current) positionPatternBoxSoon(chart, patternBoxRef.current, candlesRef.current, patternLengthRef.current);
     });
     resizeObserver.observe(host);
 
@@ -105,14 +110,14 @@ export default function MarketChart({ symbol, timeframe, patternLength, highligh
       candlesRef.current = candles;
       candleByTimeRef.current = new Map(candles.map((candle) => [candle.time, candle]));
       if (signature === renderedSignatureRef.current) {
-        if (patternBoxRef.current) positionPatternBox(chart, patternBoxRef.current, candles, patternLengthRef.current);
+        if (patternBoxRef.current) positionPatternBoxSoon(chart, patternBoxRef.current, candles, patternLengthRef.current);
         return true;
       }
       renderedSignatureRef.current = signature;
       const data: CandlestickData<Time>[] = candles.map((candle) => ({ time: candle.time as Time, open: candle.open, high: candle.high, low: candle.low, close: candle.close }));
       series.setData(data);
       if (refit) chart.timeScale().fitContent();
-      if (patternBoxRef.current) positionPatternBox(chart, patternBoxRef.current, candles, patternLengthRef.current);
+      if (patternBoxRef.current) positionPatternBoxSoon(chart, patternBoxRef.current, candles, patternLengthRef.current);
       return true;
     }
 
@@ -171,13 +176,13 @@ export default function MarketChart({ symbol, timeframe, patternLength, highligh
     renderedSignatureRef.current = `${candles.length}:${candles[0].time}:${candles[candles.length - 1].time}:${candles[candles.length - 1].close}`;
     series.setData(candles.map((candle) => ({ time: candle.time as Time, open: candle.open, high: candle.high, low: candle.low, close: candle.close })));
     chart.timeScale().fitContent();
-    if (patternBoxRef.current) positionPatternBox(chart, patternBoxRef.current, candles, patternLength);
+    if (patternBoxRef.current) positionPatternBoxSoon(chart, patternBoxRef.current, candles, patternLength);
   }, [symbol, timeframe, patternLength]);
 
   useEffect(() => {
     if (!chartRef.current) return;
     chartRef.current.applyOptions({ handleScroll: highlightLocked ? false : true, handleScale: highlightLocked ? false : true });
-    if (patternBoxRef.current) positionPatternBox(chartRef.current, patternBoxRef.current, candlesRef.current, patternLength);
+    if (patternBoxRef.current) positionPatternBoxSoon(chartRef.current, patternBoxRef.current, candlesRef.current, patternLength);
   }, [highlightLocked, patternLength]);
 
   return <div ref={containerRef} onMouseLeave={hideTooltip} className={`group relative w-full ${dashboardFullscreen ? "min-h-0 flex-1" : "h-[380px]"}`}>
