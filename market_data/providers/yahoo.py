@@ -53,8 +53,8 @@ class YahooFinanceProvider(MarketDataProvider):
             auto_adjust=False,
             actions=False,
             prepost=False,
-            repair=True,
-            timeout=15,
+            repair=False,
+            timeout=12,
         )
         return self._frame_to_candles(frame)
 
@@ -78,7 +78,7 @@ class YahooFinanceProvider(MarketDataProvider):
         except Exception:
             pass
 
-        frame = ticker.history(period="2d", interval="1d", auto_adjust=False, actions=False, repair=True, timeout=15)
+        frame = ticker.history(period="2d", interval="1d", auto_adjust=False, actions=False, repair=False, timeout=12)
         if frame is None or frame.empty or "Close" not in frame:
             raise ValueError(f"Yahoo Finance quote unavailable: {normalized}")
         closes = [float(value) for value in frame["Close"].dropna().tolist()]
