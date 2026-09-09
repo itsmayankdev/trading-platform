@@ -44,6 +44,45 @@ class CandleRepository:
         inserted_ids = result.scalars().all()
         return len(inserted_ids)
 
+    def upsert_many(
+        self,
+        db: Session,
+        instrument_id: int,
+        timeframe: str,
+        candles: list,
+    ) -> int:
+        """Insert candles and update an existing row when the candle is still forming."""
+        if not candles:
+            return 0
+
+        rows = [
+            {
+                "instrument_id": instrument_id,
+                "timeframe": timeframe,
+                "timestamp": candle.timestamp,
+                "open": candle.open,
+                "high": candle.high,
+                "low": candle.low,
+                "close": candle.close,
+                "volume": candle.volume,
+            }
+            for candle in candles
+        ]
+
+        statement = insert(Candle).values(rows)
+        statement = statement.on_conflict_do_update(
+            constraint="uq_candle_instrument_timeframe_timestamp",
+            set_={
+                "open": statement.excluded.open,
+                "high": statement.excluded.high,
+                "low": statement.excluded.low,
+                "close": statement.excluded.close,
+                "volume": statement.excluded.volume,
+            },
+        )
+        result = db.execute(statement)
+        return len(rows)
+
     def get_candles(
         self,
         db: Session,
