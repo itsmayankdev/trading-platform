@@ -17,7 +17,7 @@ _ONE_MINUTE_FULL_DAYS = 7
 _DAILY_FULL_DAYS = 3650
 _FAST_INTRADAY_DAYS = 2
 _FAST_DAILY_DAYS = 365
-_TIMEFRAMES = {"1m", "5m", "15m", "30m", "1h", "1d"}
+_TIMEFRAMES = ("1m", "5m", "15m", "30m", "1h", "1d")
 _MAX_WORKERS = 2
 
 _executor = ThreadPoolExecutor(max_workers=_MAX_WORKERS, thread_name_prefix="yahoo-warmup")
@@ -28,10 +28,16 @@ _running: dict[tuple[str, str], Future[object]] = {}
 
 def _coverage(symbol: str, timeframe: str) -> tuple[datetime | None, datetime | None, int]:
     with SessionLocal() as db:
-        start = db.execute(select(Candle.timestamp).join(Instrument, Instrument.id == Candle.instrument_id).where(Instrument.symbol == symbol, Instrument.provider == "yahoo", Candle.timeframe == timeframe).order_by(Candle.timestamp.asc()).limit(1)).scalar_one_or_none()
-        end = db.execute(select(Candle.timestamp).join(Instrument, Instrument.id == Candle.instrument_id).where(Instrument.symbol == symbol, Instrument.provider == "yahoo", Candle.timeframe == timeframe).order_by(Candle.timestamp.desc()).limit(1)).scalar_one_or_none()
-        count = int(db.execute(select(func.count(Candle.id)).join(Instrument, Instrument.id == Candle.instrument_id).where(Instrument.symbol == symbol, Instrument.provider == "yahoo", Candle.timeframe == timeframe)).scalar_one() or 0)
-    return start, end, count
+        row = db.execute(
+            select(func.min(Candle.timestamp), func.max(Candle.timestamp), func.count(Candle.id))
+            .join(Instrument, Instrument.id == Candle.instrument_id)
+            .where(
+                Instrument.symbol == symbol,
+                Instrument.provider == "yahoo",
+                Candle.timeframe == timeframe,
+            )
+        ).one()
+    return row[0], row[1], int(row[2] or 0)
 
 
 def _instrument(db, symbol: str) -> Instrument:
@@ -95,9 +101,8 @@ def ensure_yahoo_market_data(symbol: str, timeframe: str, minimum_candles: int) 
 
     min_time, max_time, count = _coverage(symbol, timeframe)
     if count < minimum_candles:
-        # Pattern Search and MarketChart can request the same newly selected
-        # market concurrently. Coalesce the foreground fetch so Yahoo is only
-        # contacted once, then let both callers read the committed candles.
+        # Multiple foreground callers (chart + pattern search) share one
+        # critical section, preventing duplicate Yahoo downloads and inserts.
         with _foreground_lock:
             min_time, max_time, count = _coverage(symbol, timeframe)
             if count < minimum_candles:
@@ -106,5 +111,14 @@ def ensure_yahoo_market_data(symbol: str, timeframe: str, minimum_candles: int) 
                 _fetch_and_store(symbol, timeframe, now - timedelta(days=days), now)
                 min_time, max_time, count = _coverage(symbol, timeframe)
 
+    # Full history is never part of the foreground request.
     _submit_background(symbol)
-    return {"symbol": symbol, "timeframe": timeframe, "candle_count": count, "start_time": min_time.isoformat() if min_time else None, "end_time": max_time.isoformat() if max_time else None, "provider": "yahoo", "intraday_history_limit_days": _ONE_MINUTE_FULL_DAYS if timeframe == "1m" else _INTRADAY_FULL_DAYS}
+    return {
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "candle_count": count,
+        "start_time": min_time.isoformat() if min_time else None,
+        "end_time": max_time.isoformat() if max_time else None,
+        "provider": "yahoo",
+        "intraday_history_limit_days": _ONE_MINUTE_FULL_DAYS if timeframe == "1m" else _INTRADAY_FULL_DAYS,
+    }
