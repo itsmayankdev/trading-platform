@@ -105,7 +105,10 @@ class PatternSearchService:
                 timings[name] = time.perf_counter() - started
 
         started = time.perf_counter()
-        ensure_market_data(symbol, timeframe, pattern_length + 1)
+        # Pattern search is latency-sensitive. It only requires enough candles to
+        # execute the search; full-history expansion is owned by the ingestion
+        # scheduler/background workers rather than this request.
+        ensure_market_data(symbol, timeframe, pattern_length + 1, background_history=False)
         mark("warmup_check", started)
 
         started = time.perf_counter()
@@ -190,5 +193,5 @@ class PatternSearchService:
         _put_cached_result(result_key, latest_timestamp, latest_close, response)
         if profile:
             total = sum(timings.values())
-            print("PATTERN_SEARCH_PROFILE " + " ".join(f"{name}={value:.4f}s" for name, value in timings.items()) + f" cache_hit={cache_hit} candles={len(rows)} stages={total:.4f}s")
+            print("PATTERN_SEARCH_PROFILE " + " ".join(f"{name}={value:.4f}s" for name, value in timings.items()) + f" cache_hit={cache_hit} candles={len(rows)} stages={total:.4f}s", flush=True)
         return response
