@@ -13,6 +13,7 @@ from backend.app.repositories.candle import CandleRepository
 from market_data.providers.yahoo import YahooFinanceProvider
 
 _INTRADAY_FULL_DAYS = 60
+_ONE_MINUTE_FULL_DAYS = 7
 _DAILY_FULL_DAYS = 3650
 _FAST_INTRADAY_DAYS = 7
 _FAST_DAILY_DAYS = 365
@@ -54,7 +55,7 @@ def _fetch_and_store(symbol: str, timeframe: str, start: datetime, end: datetime
 
 def _run_full(symbol: str, timeframe: str) -> None:
     now = datetime.now(timezone.utc)
-    days = _INTRADAY_FULL_DAYS if timeframe != "1d" else _DAILY_FULL_DAYS
+    days = _ONE_MINUTE_FULL_DAYS if timeframe == "1m" else _INTRADAY_FULL_DAYS if timeframe != "1d" else _DAILY_FULL_DAYS
     desired_start = now - timedelta(days=days)
     min_time, max_time, _ = _coverage(symbol, timeframe)
     start = desired_start if min_time is None or min_time > desired_start else min_time
@@ -97,4 +98,4 @@ def ensure_yahoo_market_data(symbol: str, timeframe: str, minimum_candles: int) 
         _fetch_and_store(symbol, timeframe, now - timedelta(days=days), now)
         min_time, max_time, count = _coverage(symbol, timeframe)
     _submit_background(symbol)
-    return {"symbol": symbol, "timeframe": timeframe, "candle_count": count, "start_time": min_time.isoformat() if min_time else None, "end_time": max_time.isoformat() if max_time else None, "provider": "yahoo", "intraday_history_limit_days": _INTRADAY_FULL_DAYS}
+    return {"symbol": symbol, "timeframe": timeframe, "candle_count": count, "start_time": min_time.isoformat() if min_time else None, "end_time": max_time.isoformat() if max_time else None, "provider": "yahoo", "intraday_history_limit_days": _ONE_MINUTE_FULL_DAYS if timeframe == "1m" else _INTRADAY_FULL_DAYS}
