@@ -13,10 +13,21 @@ const MENU: MenuItem[] = [
 ];
 
 type LegacyBridge = { host: HTMLDivElement; input: HTMLInputElement; menu: HTMLDivElement; onChange: () => void; onGlobal: (event: Event) => void; timer?: number };
+const PERMISSION_CACHE_KEY = "market-memory-permissions-v1";
 let permissionCache: { owner: boolean; permissions: string[] } | null = null;
 let permissionPromise: Promise<{ owner: boolean; permissions: string[] }> | null = null;
 
+function readPermissionCache() {
+  if (permissionCache || typeof window === "undefined") return permissionCache;
+  try {
+    const raw = sessionStorage.getItem(PERMISSION_CACHE_KEY);
+    if (raw) permissionCache = JSON.parse(raw) as { owner: boolean; permissions: string[] };
+  } catch { /* ignore invalid browser cache */ }
+  return permissionCache;
+}
+
 async function loadPermissions() {
+  readPermissionCache();
   if (permissionCache) return permissionCache;
   if (!permissionPromise) {
     permissionPromise = Promise.all([
@@ -26,6 +37,7 @@ async function loadPermissions() {
       const admin = await adminResponse.json().catch(() => ({}));
       const user = await userResponse.json().catch(() => ({}));
       permissionCache = { owner: admin?.authenticated === true && admin?.owner === true, permissions: Array.isArray(user?.permissions) ? user.permissions : [] };
+      try { sessionStorage.setItem(PERMISSION_CACHE_KEY, JSON.stringify(permissionCache)); } catch { /* ignore storage failures */ }
       return permissionCache;
     }).catch(() => {
       permissionCache = { owner: false, permissions: [] };
@@ -37,8 +49,8 @@ async function loadPermissions() {
 
 export default function Sidebar({ symbol, collapsed, onCollapsedChange, onSymbolSelect }: SidebarProps) {
   const initialized = useRef(false);
-  const [owner, setOwner] = useState(() => permissionCache?.owner ?? false);
-  const [permissions, setPermissions] = useState<string[]>(() => permissionCache?.permissions ?? []);
+  const [owner, setOwner] = useState(() => readPermissionCache()?.owner ?? false);
+  const [permissions, setPermissions] = useState<string[]>(() => readPermissionCache()?.permissions ?? []);
   const [globalSymbol, setGlobalSymbol] = useState(() => readGlobalMarket(symbol).symbol);
 
   useEffect(() => {
@@ -51,10 +63,9 @@ export default function Sidebar({ symbol, collapsed, onCollapsedChange, onSymbol
 
   useEffect(() => { if (!initialized.current || !symbol || symbol === globalSymbol) return; writeGlobalMarket(symbol); setGlobalSymbol(symbol); }, [symbol, globalSymbol]);
 
-  // One-shot compatibility adapter for legacy module selects. The previous
-  // implementation kept a MutationObserver on the entire document and mounted
-  // React roots dynamically; that caused unnecessary work during route changes.
-  // The adapter now performs a short one-time scan after the page DOM is ready.
+  // One-shot compatibility adapter for legacy module selects. It deliberately
+  // avoids a document-wide MutationObserver and dynamically-created React roots,
+  // both of which made route changes expensive and caused unmount races.
   useEffect(() => {
     const bridges = new Map<HTMLSelectElement, LegacyBridge>();
     const enhance = () => {
@@ -90,7 +101,7 @@ export default function Sidebar({ symbol, collapsed, onCollapsedChange, onSymbol
 
   const allowed = (permission: string) => permissions.includes(permission) || permissions.includes(permission.replace(".use", ".view"));
   const selectMarket = (nextSymbol: string) => { const normalized = nextSymbol.trim().toUpperCase().replace(/[^A-Z0-9]/g, ""); if (!normalized) return; writeGlobalMarket(normalized); setGlobalSymbol(normalized); onSymbolSelect(normalized); };
-  const itemClass = (href: string) => `flex items-center gap-2 rounded-md px-2.5 py-2 text-[10px] font-medium transition ${typeof window !== "undefined" && window.location.pathname.startsWith(href) ? "bg-white/[0.06] text-white/85" : "text-white/45 hover:bg-white/[0.03] hover:text-white/70"} ${collapsed ? "justify-center px-0" : ""}`;
+  const itemClass = (href: string) => `flex items-center gap-2 rounded-md px-2.5 py-2 text-[10px] font-medium transition text-white/45 hover:bg-white/[0.03] hover:text-white/70 ${collapsed ? "justify-center px-0" : ""}`;
 
   return <aside className={`${collapsed ? "w-[52px]" : "w-[188px]"} hidden shrink-0 border-r border-white/7 bg-[#090d13] transition-[width] duration-200 lg:block`}><div className="sticky top-12 flex h-[calc(100vh-48px)] flex-col"><div className="flex h-10 items-center border-b border-white/7 px-2">{!collapsed && <span className="px-2 text-[9px] font-semibold uppercase tracking-[0.15em] text-white/25">Workspace</span>}<button type="button" aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"} onClick={() => onCollapsedChange(!collapsed)} className="ml-auto flex h-7 w-7 items-center justify-center rounded-md border border-white/8 text-white/35 hover:bg-white/5 hover:text-white/75">{collapsed ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}</button></div>
     {!collapsed && <div className="border-b border-white/7 px-2 py-2"><div className="mb-1 px-1 text-[8px] font-semibold uppercase tracking-[.14em] text-white/20">Global market</div><MarketSelector value={globalSymbol || symbol} onChange={selectMarket} className="w-full" /></div>}
