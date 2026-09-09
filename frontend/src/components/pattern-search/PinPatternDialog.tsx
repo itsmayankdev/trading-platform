@@ -4,42 +4,5 @@ import { useEffect, useState } from "react";
 import { Pin, X } from "lucide-react";
 import { favoriteNameExists, readFavoritePatterns, saveFavoritePattern, type FavoritePattern } from "@/lib/favorites";
 
-type Props = {
-  favorite: Omit<FavoritePattern, "id" | "name" | "createdAt"> | null;
-  onClose: () => void;
-  onSaved?: () => void;
-};
-
-export default function PinPatternDialog({ favorite, onClose, onSaved }: Props) {
-  const [name, setName] = useState("");
-  const [error, setError] = useState("");
-
-  useEffect(() => {
-    if (!favorite) return;
-    setName("");
-    setError("");
-  }, [favorite]);
-
-  if (!favorite) return null;
-
-  function submit() {
-    const trimmed = name.trim();
-    if (!trimmed) { setError("Give this pattern a name."); return; }
-    if (trimmed.length > 40) { setError("Keep the name under 40 characters."); return; }
-    if (favoriteNameExists(trimmed, readFavoritePatterns())) { setError("That name is already used. Choose a different name."); return; }
-    const saved = saveFavoritePattern({ ...favorite, id: crypto.randomUUID(), name: trimmed, createdAt: new Date().toISOString() });
-    if (!saved) { setError("That name is already used. Choose a different name."); return; }
-    onSaved?.();
-    onClose();
-  }
-
-  return <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/65 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="pin-pattern-title">
-    <div className="w-full max-w-[390px] rounded-xl border border-white/10 bg-[#0b1017] p-5 shadow-2xl">
-      <div className="flex items-start justify-between gap-4"><div><div className="flex items-center gap-2 text-amber-200/80"><Pin size={15} /><span className="text-[9px] font-semibold uppercase tracking-[0.15em]">Pin chart pattern</span></div><h2 id="pin-pattern-title" className="mt-2 text-base font-semibold">Save to Favorites</h2><p className="mt-1 text-[11px] text-white/35">Give this chart pattern a unique name. You can use it later when creating an alert.</p></div><button type="button" onClick={onClose} aria-label="Close" className="rounded-md p-1.5 text-white/35 hover:bg-white/5 hover:text-white"><X size={15} /></button></div>
-      <div className="mt-4 rounded-md border border-white/7 bg-white/[0.02] px-3 py-2 text-[10px] text-white/45"><span className="font-semibold text-white/70">{favorite.symbol.replace("USDT", "/USDT")}</span><span className="mx-1.5 text-white/15">·</span>{favorite.timeframe}<span className="mx-1.5 text-white/15">·</span>{favorite.patternLength} candles{favorite.type === "historical" && favorite.similarityScore != null && <><span className="mx-1.5 text-white/15">·</span>{favorite.similarityScore.toFixed(2)}% match</>}</div>
-      <label className="mt-4 block text-[10px] font-medium uppercase tracking-[0.1em] text-white/35">Pattern name<input autoFocus value={name} onChange={(event) => { setName(event.target.value); setError(""); }} onKeyDown={(event) => { if (event.key === "Enter") submit(); }} maxLength={40} placeholder="e.g. ETH breakout structure" className="mt-2 h-10 w-full rounded-md border border-white/10 bg-[#080c12] px-3 text-sm text-white outline-none placeholder:text-white/20 focus:border-amber-200/35" /></label>
-      {error && <div className="mt-2 text-[10px] text-rose-300">{error}</div>}
-      <div className="mt-5 flex justify-end gap-2"><button type="button" onClick={onClose} className="rounded-md border border-white/10 px-3 py-2 text-[10px] font-semibold text-white/45 hover:bg-white/5 hover:text-white">Cancel</button><button type="button" onClick={submit} className="rounded-md bg-white px-4 py-2 text-[10px] font-semibold text-black hover:bg-white/90">Pin to Favorites</button></div>
-    </div>
-  </div>;
-}
+type Props = { favorite: (Omit<FavoritePattern, "id" | "name" | "createdAt"> & { type?: FavoritePattern["type"] }) | null; onClose:()=>void; onSaved?:()=>void };
+export default function PinPatternDialog({favorite,onClose,onSaved}:Props){const[name,setName]=useState("");const[error,setError]=useState("");useEffect(()=>{if(!favorite)return;setName("");setError("");},[favorite]);if(!favorite)return null;function submit(){const trimmed=name.trim();if(!trimmed){setError("Give this pattern a name.");return}if(trimmed.length>40){setError("Keep the name under 40 characters.");return}if(favoriteNameExists(trimmed,readFavoritePatterns())){setError("That name is already used. Choose a different name.");return}const saved=saveFavoritePattern({...favorite,type:favorite.type??"historical",id:crypto.randomUUID(),name:trimmed,createdAt:new Date().toISOString()});if(!saved){setError("That name is already used. Choose a different name.");return}onSaved?.();onClose();}return <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/65 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="pin-pattern-title"><div className="w-full max-w-[390px] rounded-xl border border-white/10 bg-[#0b1017] p-5 shadow-2xl"><div className="flex items-start justify-between gap-4"><div><div className="flex items-center gap-2 text-amber-200/80"><Pin size={15}/><span className="text-[9px] font-semibold uppercase tracking-[0.15em]">Pin chart pattern</span></div><h2 id="pin-pattern-title" className="mt-2 text-base font-semibold">Save to Favorites</h2><p className="mt-1 text-[11px] text-white/35">Give this chart pattern a unique name. You can use it later when creating an alert.</p></div><button type="button" onClick={onClose} aria-label="Close" className="rounded-md p-1.5 text-white/35 hover:bg-white/5"><X size={15}/></button></div><div className="mt-4 rounded-md border border-white/7 bg-white/[0.02] px-3 py-2 text-[10px] text-white/45"><span className="font-semibold text-white/70">{favorite.symbol.replace("USDT","/USDT")}</span><span className="mx-1.5 text-white/15">·</span>{favorite.timeframe}<span className="mx-1.5 text-white/15">·</span>{favorite.patternLength} candles{favorite.type==="historical"&&favorite.similarityScore!=null&&<><span className="mx-1.5 text-white/15">·</span>{favorite.similarityScore.toFixed(2)}% match</>}</div><label className="mt-4 block text-[10px] font-medium uppercase tracking-[0.1em] text-white/35">Pattern name<input autoFocus value={name} onChange={e=>{setName(e.target.value);setError("")}} onKeyDown={e=>{if(e.key==="Enter")submit()}} maxLength={40} placeholder="e.g. ETH breakout structure" className="mt-2 h-10 w-full rounded-md border border-white/10 bg-[#080c12] px-3 text-sm text-white outline-none placeholder:text-white/20"/></label>{error&&<div className="mt-2 text-[10px] text-rose-300">{error}</div>}<div className="mt-5 flex justify-end gap-2"><button type="button" onClick={onClose} className="rounded-md border border-white/10 px-3 py-2 text-[10px] font-semibold text-white/45">Cancel</button><button type="button" onClick={submit} className="rounded-md bg-white px-4 py-2 text-[10px] font-semibold text-black">Pin to Favorites</button></div></div></div>}
