@@ -64,6 +64,9 @@ export default function Sidebar({ symbol, collapsed, onCollapsedChange, onSymbol
         const choose = (nextSymbol: string) => {
           const normalized = nextSymbol.trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
           if (!normalized) return;
+          if (!Array.from(select.options).some((option) => option.value.toUpperCase() === normalized)) {
+            const option = document.createElement("option"); option.value = normalized; option.textContent = normalized; select.appendChild(option);
+          }
           const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")?.set;
           setter?.call(select, normalized);
           input.value = normalized;
