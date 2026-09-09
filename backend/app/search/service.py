@@ -3,10 +3,10 @@ from __future__ import annotations
 import os
 import time
 from collections import OrderedDict
-from threading import Lock
 from statistics import median
+from threading import Lock
 
-from sqlalchemy import and_, desc, select
+from sqlalchemy import desc, select
 
 from backend.app.db.session import SessionLocal
 from backend.app.models.candle import Candle
@@ -19,13 +19,12 @@ from pattern_engine.outcomes import calculate_outcomes
 from pattern_engine.statistics import calculate_statistics
 from pattern_engine.diagnostics import build_match_diagnostics
 
-
-# The hot path keeps only timestamp/close columns in memory. OHLCV is fetched
-# only for the small set of winning historical windows. This avoids moving a
-# full year's worth of Python ORM rows through the search request.
 _CACHE_MAX_ENTRIES = 16
 _CACHE_TTL_SECONDS = 30.0
+_RESULT_CACHE_MAX_ENTRIES = 12
+_RESULT_CACHE_TTL_SECONDS = 10.0
 _NUMERICAL_CACHE: OrderedDict[tuple[int, str], tuple[float, object, object, tuple]] = OrderedDict()
+_RESULT_CACHE: OrderedDict[tuple[int, str, int, int], tuple[float, object, object, dict]] = OrderedDict()
 _CACHE_LOCK = Lock()
 
 
@@ -66,20 +65,26 @@ def _cached_numerical_rows(instrument_id: int, timeframe: str) -> tuple[tuple, b
             return rows, False
 
 
-def _load_window_rows(instrument_id: int, timeframe: str, start_time, end_time) -> tuple:
-    """Load OHLCV only for one matched window and its forward horizon."""
-    with SessionLocal() as db:
-        return tuple(
-            db.execute(
-                select(Candle.timestamp, Candle.open, Candle.high, Candle.low, Candle.close, Candle.volume)
-                .where(
-                    Candle.instrument_id == instrument_id,
-                    Candle.timeframe == timeframe,
-                    and_(Candle.timestamp >= start_time, Candle.timestamp <= end_time),
-                )
-                .order_by(Candle.timestamp.asc())
-            ).all()
-        )
+def _get_cached_result(key: tuple[int, str, int, int], latest_timestamp, latest_close):
+    now = time.monotonic()
+    with _CACHE_LOCK:
+        cached = _RESULT_CACHE.get(key)
+        if cached is None:
+            return None
+        cached_at, cached_timestamp, cached_close, response = cached
+        if now - cached_at > _RESULT_CACHE_TTL_SECONDS or cached_timestamp != latest_timestamp or cached_close != latest_close:
+            _RESULT_CACHE.pop(key, None)
+            return None
+        _RESULT_CACHE.move_to_end(key)
+        return response
+
+
+def _put_cached_result(key: tuple[int, str, int, int], latest_timestamp, latest_close, response: dict) -> None:
+    with _CACHE_LOCK:
+        _RESULT_CACHE[key] = (time.monotonic(), latest_timestamp, latest_close, response)
+        _RESULT_CACHE.move_to_end(key)
+        while len(_RESULT_CACHE) > _RESULT_CACHE_MAX_ENTRIES:
+            _RESULT_CACHE.popitem(last=False)
 
 
 class PatternSearchService:
@@ -91,9 +96,8 @@ class PatternSearchService:
             if profile:
                 timings[name] = time.perf_counter() - started
 
-        # On a warmed market this is a cheap coverage check. On a new market it
-        # seeds only enough recent candles for the requested search and queues the
-        # complete one-year 5m/15m/1h history asynchronously.
+        # Only the minimum foreground seed is synchronous. Full history is queued
+        # by the provider-specific warmup worker and never blocks this request.
         started = time.perf_counter()
         ensure_market_data(symbol, timeframe, pattern_length + 1)
         mark("warmup_check", started)
@@ -103,6 +107,12 @@ class PatternSearchService:
         mark("numerical_db_load", started)
         if len(rows) < pattern_length + 1:
             raise ValueError("Market data is still warming up; please retry in a moment")
+
+        latest_timestamp, latest_close = rows[-1].timestamp, rows[-1].close
+        result_key = (instrument_id, timeframe, pattern_length, top_k)
+        cached_result = _get_cached_result(result_key, latest_timestamp, latest_close)
+        if cached_result is not None:
+            return cached_result
 
         timestamps = [row.timestamp for row in rows]
         closes = [row.close for row in rows]
@@ -142,17 +152,14 @@ class PatternSearchService:
         all_outcomes = []
         max_horizon = 60
 
+        # The numerical cache already contains the full OHLCV-independent candle
+        # timeline. Reuse it for every winning match instead of issuing one SQL
+        # query per match. This removes the N+1 query pattern from the hot path.
         for match_index, match in enumerate(matches, start=1):
             start_index = timestamp_to_index[match.start_time]
             future_end_index = min(start_index + pattern_length + max_horizon - 1, len(rows) - 1)
-            window_rows = _load_window_rows(
-                instrument_id,
-                timeframe,
-                timestamps[start_index],
-                timestamps[future_end_index],
-            )
-            matched_rows = window_rows[:pattern_length]
-            future_rows = window_rows[pattern_length : pattern_length + max_horizon]
+            matched_rows = rows[start_index : start_index + pattern_length]
+            future_rows = rows[start_index + pattern_length : future_end_index + 1]
 
             matched_window = PatternWindow(
                 symbol=symbol,
@@ -166,13 +173,13 @@ class PatternSearchService:
                         high=row.high,
                         low=row.low,
                         close=row.close,
-                        volume=row.volume,
+                        volume=0.0,
                     )
                     for row in matched_rows
                 ),
             )
             future = [
-                CandlePoint(timestamp=row.timestamp, open=row.open, high=row.high, low=row.low, close=row.close, volume=row.volume)
+                CandlePoint(timestamp=row.timestamp, open=0.0, high=0.0, low=0.0, close=row.close, volume=0.0)
                 for row in future_rows
             ]
             outcomes = calculate_outcomes(match=matched_window, future_candles=future)
@@ -243,6 +250,7 @@ class PatternSearchService:
             "quality_diagnostics": diagnostics,
         }
         mark("response_build", started)
+        _put_cached_result(result_key, latest_timestamp, latest_close, response)
 
         if profile:
             total = sum(timings.values())
