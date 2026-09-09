@@ -31,6 +31,20 @@ _CACHE_LOCK = Lock()
 def _cached_numerical_rows(instrument_id: int, timeframe: str) -> tuple[tuple, bool]:
     key = (instrument_id, timeframe)
     now = time.monotonic()
+
+    # Fast path: searches for different pattern lengths should reuse the same
+    # in-memory candle snapshot instead of hitting PostgreSQL on every request.
+    # The snapshot is intentionally short-lived so normal live-data updates are
+    # picked up automatically without making the search endpoint latency-bound
+    # by a latest-row query on every request.
+    with _CACHE_LOCK:
+        cached = _NUMERICAL_CACHE.get(key)
+        if cached is not None:
+            cached_at, cached_timestamp, cached_close, cached_rows = cached
+            if now - cached_at <= _CACHE_TTL_SECONDS:
+                _NUMERICAL_CACHE.move_to_end(key)
+                return cached_rows, True
+
     with SessionLocal() as db:
         latest = db.execute(
             select(Candle.timestamp, Candle.close)
@@ -40,13 +54,17 @@ def _cached_numerical_rows(instrument_id: int, timeframe: str) -> tuple[tuple, b
         if latest is None:
             return (), False
         latest_timestamp, latest_close = latest
+
         with _CACHE_LOCK:
+            # Another request may have populated the snapshot while this request
+            # was waiting for a DB connection. Reuse it if it is still fresh.
             cached = _NUMERICAL_CACHE.get(key)
             if cached is not None:
                 cached_at, cached_timestamp, cached_close, cached_rows = cached
-                if now - cached_at <= _CACHE_TTL_SECONDS and cached_timestamp == latest_timestamp and cached_close == latest_close:
+                if now - cached_at <= _CACHE_TTL_SECONDS:
                     _NUMERICAL_CACHE.move_to_end(key)
                     return cached_rows, True
+
         rows = tuple(db.execute(
             select(Candle.timestamp, Candle.open, Candle.high, Candle.low, Candle.close, Candle.volume)
             .where(Candle.instrument_id == instrument_id, Candle.timeframe == timeframe)
