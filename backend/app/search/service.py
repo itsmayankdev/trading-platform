@@ -23,6 +23,13 @@ _CACHE_MAX_ENTRIES = 16
 _CACHE_TTL_SECONDS = 30.0
 _RESULT_CACHE_MAX_ENTRIES = 12
 _RESULT_CACHE_TTL_SECONDS = 10.0
+# V1 remains the fast candidate generator. Production V3 then re-ranks a broad
+# candidate pool using complete OHLCV structure. This two-stage design avoids a
+# full structural scan of years of minute data while preventing close-path-only
+# similarity from deciding the final matches.
+_CANDIDATE_POOL_MIN = 200
+_CANDIDATE_POOL_MULTIPLIER = 20
+_CANDIDATE_POOL_MAX = 500
 _NUMERICAL_CACHE: OrderedDict[tuple[int, str], tuple[float, object, object, tuple]] = OrderedDict()
 _RESULT_CACHE: OrderedDict[tuple[int, str, int, int], tuple[float, object, object, dict]] = OrderedDict()
 _CACHE_LOCK = Lock()
@@ -47,7 +54,11 @@ def _cached_numerical_rows(instrument_id: int, timeframe: str) -> tuple[tuple, b
             cached = _NUMERICAL_CACHE.get(key)
             if cached is not None:
                 cached_at, cached_timestamp, cached_close, cached_rows = cached
-                if now - cached_at <= _CACHE_TTL_SECONDS and cached_timestamp == latest_timestamp and cached_close == latest_close:
+                if (
+                    now - cached_at <= _CACHE_TTL_SECONDS
+                    and cached_timestamp == latest_timestamp
+                    and cached_close == latest_close
+                ):
                     _NUMERICAL_CACHE.move_to_end(key)
                     return cached_rows, True
 
@@ -81,7 +92,11 @@ def _get_cached_result(key: tuple[int, str, int, int], latest_timestamp, latest_
         if cached is None:
             return None
         cached_at, cached_timestamp, cached_close, response = cached
-        if now - cached_at > _RESULT_CACHE_TTL_SECONDS or cached_timestamp != latest_timestamp or cached_close != latest_close:
+        if (
+            now - cached_at > _RESULT_CACHE_TTL_SECONDS
+            or cached_timestamp != latest_timestamp
+            or cached_close != latest_close
+        ):
             _RESULT_CACHE.pop(key, None)
             return None
         _RESULT_CACHE.move_to_end(key)
@@ -94,6 +109,29 @@ def _put_cached_result(key: tuple[int, str, int, int], latest_timestamp, latest_
         _RESULT_CACHE.move_to_end(key)
         while len(_RESULT_CACHE) > _RESULT_CACHE_MAX_ENTRIES:
             _RESULT_CACHE.popitem(last=False)
+
+
+def _window_from_rows(symbol: str, timeframe: str, rows, start_index: int, length: int) -> PatternWindow:
+    selected = rows[start_index : start_index + length]
+    if len(selected) != length:
+        raise ValueError("Insufficient candles for historical pattern window")
+    return PatternWindow(
+        symbol=symbol,
+        timeframe=timeframe,
+        start_time=selected[0].timestamp,
+        end_time=selected[-1].timestamp,
+        candles=tuple(
+            CandlePoint(
+                timestamp=row.timestamp,
+                open=row.open,
+                high=row.high,
+                low=row.low,
+                close=row.close,
+                volume=row.volume,
+            )
+            for row in selected
+        ),
+    )
 
 
 class PatternSearchService:
@@ -127,7 +165,14 @@ class PatternSearchService:
 
         started = time.perf_counter()
         current_candles = [
-            CandlePoint(timestamp=row.timestamp, open=row.open, high=row.high, low=row.low, close=row.close, volume=row.volume)
+            CandlePoint(
+                timestamp=row.timestamp,
+                open=row.open,
+                high=row.high,
+                low=row.low,
+                close=row.close,
+                volume=row.volume,
+            )
             for row in rows[-pattern_length:]
         ]
         current = PatternWindow(
@@ -140,18 +185,53 @@ class PatternSearchService:
         mark("current_pattern", started)
 
         started = time.perf_counter()
-        store = NumericalWindowStore.from_columns(timestamps=timestamps, closes=closes, window_length=pattern_length)
+        store = NumericalWindowStore.from_columns(
+            timestamps=timestamps,
+            closes=closes,
+            window_length=pattern_length,
+        )
         mark("numerical_store", started)
 
         started = time.perf_counter()
-        ranker = PatternRanker()
-        matches = ranker.rank_numerical_v1(
+        production_ranker = PatternRanker()
+        retrieval_ranker = PatternRanker("similarity_v1")
+        candidate_pool = min(
+            _CANDIDATE_POOL_MAX,
+            max(_CANDIDATE_POOL_MIN, top_k * _CANDIDATE_POOL_MULTIPLIER),
+        )
+        candidates = retrieval_ranker.rank_numerical_v1(
             current=current,
             store=store,
+            top_k=candidate_pool,
+            min_separation_candles=pattern_length,
+        )
+
+        # Rebuild only the broad candidate pool with full OHLCV data, then let
+        # production V3 perform the final structural ranking and separation.
+        candidate_windows = []
+        candidate_matches = []
+        for candidate in candidates:
+            start_index = timestamp_to_index.get(candidate.start_time)
+            if start_index is None:
+                continue
+            try:
+                candidate_windows.append(
+                    _window_from_rows(symbol, timeframe, rows, start_index, pattern_length)
+                )
+                candidate_matches.append(candidate)
+            except ValueError:
+                continue
+
+        matches = production_ranker.rank(
+            current=current,
+            historical_windows=candidate_windows,
             top_k=top_k,
             min_separation_candles=pattern_length,
         )
-        mark("ranking", started)
+        mark("candidate_retrieval_and_structural_ranking", started)
+
+        # Index final ranked windows by their start time for exact result lookup.
+        match_windows = {window.start_time: window for window in candidate_windows}
 
         started = time.perf_counter()
         match_results = []
@@ -167,24 +247,10 @@ class PatternSearchService:
             future_end_index = min(start_index + pattern_length + max_horizon - 1, len(rows) - 1)
             matched_rows = rows[start_index : start_index + pattern_length]
             future_rows = rows[start_index + pattern_length : future_end_index + 1]
+            matched_window = match_windows.get(match.start_time)
+            if matched_window is None:
+                matched_window = _window_from_rows(symbol, timeframe, rows, start_index, pattern_length)
 
-            matched_window = PatternWindow(
-                symbol=symbol,
-                timeframe=timeframe,
-                start_time=match.start_time,
-                end_time=match.end_time,
-                candles=tuple(
-                    CandlePoint(
-                        timestamp=row.timestamp,
-                        open=row.open,
-                        high=row.high,
-                        low=row.low,
-                        close=row.close,
-                        volume=row.volume,
-                    )
-                    for row in matched_rows
-                ),
-            )
             future = [
                 CandlePoint(
                     timestamp=row.timestamp,
@@ -201,7 +267,10 @@ class PatternSearchService:
 
             entry_close = matched_window.candles[-1].close
             path_values = [0.0]
-            path_values.extend((row.close / entry_close - 1.0) if entry_close else 0.0 for row in future_rows)
+            path_values.extend(
+                (row.close / entry_close - 1.0) if entry_close else 0.0
+                for row in future_rows
+            )
             forward_paths.append({
                 "match_index": match_index,
                 "similarity_score": round(match.similarity_score * 100, 4),
@@ -244,8 +313,8 @@ class PatternSearchService:
             "symbol": symbol,
             "timeframe": timeframe,
             "pattern_length": pattern_length,
-            "algorithm_version": ranker.algorithm.version,
-            "feature_version": ranker.algorithm.feature_version,
+            "algorithm_version": production_ranker.algorithm.version,
+            "feature_version": production_ranker.algorithm.feature_version,
             "current_pattern": {"start_time": current.start_time, "end_time": current.end_time},
             "matches": match_results,
             "statistics": [
@@ -271,6 +340,6 @@ class PatternSearchService:
             print(
                 "PATTERN_SEARCH_PROFILE "
                 + " ".join(f"{name}={value:.4f}s" for name, value in timings.items())
-                + f" cache_hit={cache_hit} stages={total:.4f}s candles={len(rows)}"
+                + f" cache_hit={cache_hit} candidates={len(candidates)} candles={len(rows)} stages={total:.4f}s"
             )
         return response
