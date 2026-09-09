@@ -10,7 +10,7 @@ import PatternSummary from "@/components/pattern-search/PatternSummary";
 import SearchControls from "@/components/pattern-search/SearchControls";
 import PinPatternDialog from "@/components/pattern-search/PinPatternDialog";
 import type { SearchResponse } from "@/components/pattern-search/types";
-import { prefetchMarketCandles } from "@/lib/marketCache";
+import { getMarketCandles, prefetchMarketCandles } from "@/lib/marketCache";
 import { readFavoritePatterns, type FavoritePattern } from "@/lib/favorites";
 import { readGlobalMarket, writeGlobalMarket } from "@/lib/marketContext";
 
@@ -54,7 +54,16 @@ export default function Dashboard() {
   async function refreshLiveQuote() { try { const response = await fetch(`/api/backend/api/v1/quote?symbol=${encodeURIComponent(symbol)}`, { credentials: "include", cache: "no-store" }); if (!response.ok) return; const result = await response.json() as { price: number; change_percent_24h: number }; if (typeof result.price !== "number") return; setLiveQuote({ price: result.price, change: result.change_percent_24h ?? 0 }); } catch {} }
   async function searchPatterns() { const requestedTopK = Number(topK); const requestedPatternLength = Number(patternLength); if (!Number.isInteger(requestedTopK) || requestedTopK < 5 || requestedTopK > 50 || !Number.isInteger(requestedPatternLength) || requestedPatternLength < 5 || requestedPatternLength > 500) return; searchAbortRef.current?.abort(); const controller = new AbortController(); searchAbortRef.current = controller; const requestId = ++searchRequestRef.current; setLoading(true); setError(""); const timeout = window.setTimeout(() => controller.abort(), 30000); try { const params = new URLSearchParams({ symbol, timeframe, pattern_length: String(requestedPatternLength), top_k: String(requestedTopK) }); const response = await fetch(`/api/backend/api/v1/pattern-search?${params.toString()}`, { cache: "no-store", signal: controller.signal }); if (!response.ok) { let message = `Pattern search returned ${response.status}`; try { const body = await response.json(); if (body?.detail) message = body.detail; } catch {} if (requestId === searchRequestRef.current) setError(message); return; } const next = await response.json() as SearchResponse; if (requestId === searchRequestRef.current && !controller.signal.aborted) { setData(next); if (favoriteMatchIndexRef.current != null) { setSelectedMatchIndex(Math.min(favoriteMatchIndexRef.current, Math.max(0, next.matches.length - 1))); favoriteMatchIndexRef.current = null; } } } catch (caught: unknown) { if (controller.signal.aborted) { if (requestId === searchRequestRef.current) setError("Pattern search timed out. Try again or reduce the match count."); return; } if (requestId === searchRequestRef.current) setError(caught instanceof Error ? caught.message : "Could not reach the Pattern Search service. Check that FastAPI is running."); } finally { window.clearTimeout(timeout); if (requestId === searchRequestRef.current) setLoading(false); } }
   useEffect(() => {
-    const timer = window.setTimeout(() => void searchPatterns(), SEARCH_DEBOUNCE_MS);
+    const timer = window.setTimeout(async () => {
+      // On a cold market/timeframe switch, let the shared candle request finish
+      // before starting pattern search. This prevents the chart request and
+      // pattern-search data warmup from competing for the same backend work.
+      const cached = getMarketCandles(symbol, timeframe);
+      if (!cached || cached.length === 0) {
+        try { await prefetchMarketCandles(symbol, timeframe, DASHBOARD_CHART_CANDLES); } catch {}
+      }
+      void searchPatterns();
+    }, SEARCH_DEBOUNCE_MS);
     return () => {
       window.clearTimeout(timer);
       searchAbortRef.current?.abort();
