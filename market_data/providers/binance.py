@@ -35,6 +35,12 @@ class BinanceProvider(MarketDataProvider):
     _request_lock = threading.Lock()
     _last_request_at = 0.0
 
+    def __init__(self) -> None:
+        # Reuse one connection for an entire ingestion job. Creating a fresh
+        # HTTP client for every 1,000-candle page adds avoidable connection and
+        # TLS overhead when a one-year 5m history needs many pages.
+        self._client = httpx.Client(timeout=20.0)
+
     @classmethod
     def _throttle(cls) -> None:
         with cls._request_lock:
@@ -71,11 +77,10 @@ class BinanceProvider(MarketDataProvider):
         for attempt in range(self.MAX_RETRIES):
             try:
                 self._throttle()
-                with httpx.Client(timeout=20.0) as client:
-                    response = client.get(
-                        f"{self.BASE_URL}/api/v3/klines",
-                        params=params,
-                    )
+                response = self._client.get(
+                    f"{self.BASE_URL}/api/v3/klines",
+                    params=params,
+                )
 
                 if response.status_code == 429:
                     retry_after = response.headers.get("Retry-After")
@@ -137,6 +142,12 @@ class BinanceProvider(MarketDataProvider):
         raise RuntimeError(
             f"Binance request failed after {self.MAX_RETRIES} attempts"
         ) from last_error
+
+    def __del__(self) -> None:
+        try:
+            self._client.close()
+        except Exception:
+            pass
 
 
 class _RetryableBinanceError(Exception):
