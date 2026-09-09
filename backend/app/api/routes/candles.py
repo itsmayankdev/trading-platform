@@ -7,7 +7,7 @@ from backend.app.auth.user_auth import require_permission, require_user
 from backend.app.db.session import get_db
 from backend.app.repositories.candle import CandleRepository
 from backend.app.repositories.instrument import InstrumentRepository
-from workers.ingestion.on_demand import ensure_market_data
+from workers.ingestion.on_demand import ensure_market_data, refresh_latest_market_candle
 from workers.ingestion.yahoo_on_demand import ensure_yahoo_market_data
 
 router = APIRouter(prefix="/api/v1", tags=["candles"])
@@ -27,6 +27,13 @@ def get_candles(request: Request, symbol: str = Query(default="ETHUSDT", min_len
         raise HTTPException(status_code=404, detail=f"Instrument not found: {symbol}")
 
     try:
+        # A plain candles request is the live chart path. Refresh only the
+        # currently forming Binance candle so the chart follows the live quote.
+        # Historical match requests always include a bounded start/end range,
+        # so they remain immutable historical data and do not incur this call.
+        if start_time is None and end_time is None and instrument.provider == "binance":
+            refresh_latest_market_candle(symbol=symbol, timeframe=timeframe)
+
         existing = candle_repository.get_candles(db=db, instrument_id=instrument.id, timeframe=timeframe, limit=1000)
         if len(existing) < min(limit, 1000):
             db.expire_all()
