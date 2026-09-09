@@ -11,15 +11,14 @@ _ALGORITHMS = {
     SimilarityV3.version: SimilarityV3,
 }
 
-PRODUCTION_ALGORITHM_VERSION = SimilarityV3.version
+# Restore the proven pre-V3 production matcher. V2/V3 remain available for
+# offline evaluation until their ranking quality and score calibration beat the
+# established production baseline on a representative benchmark corpus.
+PRODUCTION_ALGORITHM_VERSION = SimilarityV1.version
 
 
 def get_algorithm(version: str | None = None):
-    """Return a registered similarity implementation.
-
-    Production callers omit ``version`` so the centrally controlled production
-    matcher is used. Explicit versions remain available for offline evaluation.
-    """
+    """Return the centrally selected production matcher or an explicit research version."""
     selected = version or PRODUCTION_ALGORITHM_VERSION
     algorithm_class = _ALGORITHMS.get(selected)
     if algorithm_class is None:
