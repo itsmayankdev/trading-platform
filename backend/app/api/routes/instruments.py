@@ -32,12 +32,7 @@ def list_instruments(
     require_permission(user, "market_memory.view")
     q = search.strip().upper()
     requested_symbols = [item.strip().upper() for item in (symbols or "").split(",") if item.strip()]
-    stmt = select(Instrument).where(
-        Instrument.exchange == "binance",
-        Instrument.provider == "binance",
-        Instrument.is_listed.is_(True),
-        Instrument.is_spot_trading_allowed.is_(True),
-    )
+    stmt = select(Instrument).where(Instrument.exchange == "binance", Instrument.provider == "binance", Instrument.is_listed.is_(True), Instrument.is_spot_trading_allowed.is_(True))
     if requested_symbols:
         stmt = stmt.where(Instrument.symbol.in_(requested_symbols))
     if status.upper() != "ALL":
@@ -53,11 +48,13 @@ def list_instruments(
     else:
         stmt = stmt.order_by(Instrument.quote_asset, Instrument.base_asset, Instrument.symbol)
 
+    ticker_map: dict[str, float] = {}
     if sort.lower() == "volume":
-        # Volume ranking is intentionally provider-side rather than a frontend-maintained list.
-        # Only active Binance Spot instruments are eligible for the returned top set.
         candidates = db.execute(stmt).scalars().all()
-        ticker_map = {ticker.symbol: ticker.quote_volume for ticker in BinanceTickerProvider().get_24h_tickers()}
+        try:
+            ticker_map = {ticker.symbol: ticker.quote_volume for ticker in BinanceTickerProvider().get_24h_tickers()}
+        except Exception:
+            ticker_map = {}
         candidates.sort(key=lambda row: ticker_map.get(row.symbol, 0.0), reverse=True)
         rows = candidates[offset: offset + limit]
     else:
@@ -67,12 +64,7 @@ def list_instruments(
         return {"count": 0, "offset": offset, "limit": limit, "sort": sort, "instruments": []}
 
     ids = [row.id for row in rows]
-    coverage_rows = db.execute(
-        select(Candle.instrument_id, Candle.timeframe, func.count(Candle.timestamp), func.min(Candle.timestamp), func.max(Candle.timestamp))
-        .where(Candle.instrument_id.in_(ids))
-        .group_by(Candle.instrument_id, Candle.timeframe)
-    ).all()
-
+    coverage_rows = db.execute(select(Candle.instrument_id, Candle.timeframe, func.count(Candle.timestamp), func.min(Candle.timestamp), func.max(Candle.timestamp)).where(Candle.instrument_id.in_(ids)).group_by(Candle.instrument_id, Candle.timeframe)).all()
     now = datetime.now(timezone.utc)
     coverage: dict[int, dict[str, dict[str, object]]] = {}
     for instrument_id, timeframe, count, start_time, end_time in coverage_rows:
@@ -86,76 +78,22 @@ def list_instruments(
         if start_time and end_time:
             depth_days = max(0.0, (end_time - start_time).total_seconds() / 86400.0)
             latest_age_minutes = max(0.0, (now - end_time).total_seconds() / 60.0)
-            freshness_limit = max(15.0, minutes * 2.0)
-            if candle_count >= 90 and latest_age_minutes <= freshness_limit:
+            if candle_count >= 90 and latest_age_minutes <= max(15.0, minutes * 2.0):
                 readiness = "ready"
-        coverage.setdefault(instrument_id, {})[timeframe] = {
-            "candle_count": candle_count,
-            "start_time": start_time.isoformat() if start_time else None,
-            "end_time": end_time.isoformat() if end_time else None,
-            "depth_days": round(depth_days, 2),
-            "latest_age_minutes": round(latest_age_minutes, 1) if latest_age_minutes is not None else None,
-            "readiness": readiness,
-        }
+        coverage.setdefault(instrument_id, {})[timeframe] = {"candle_count": candle_count, "start_time": start_time.isoformat() if start_time else None, "end_time": end_time.isoformat() if end_time else None, "depth_days": round(depth_days, 2), "latest_age_minutes": round(latest_age_minutes, 1) if latest_age_minutes is not None else None, "readiness": readiness}
 
-    ticker_map = {}
-    if sort.lower() == "volume":
-        # The provider was already queried for ranking; this second small lookup is avoided by
-        # exposing volume only for the ranked request in a future cache layer.
-        # Keep response semantics explicit for the UI today.
-        try:
-            ticker_map = {ticker.symbol: ticker.quote_volume for ticker in BinanceTickerProvider().get_24h_tickers()}
-        except Exception:
-            ticker_map = {}
-
-    return {
-        "count": len(rows),
-        "offset": offset,
-        "limit": limit,
-        "sort": sort,
-        "instruments": [
-            {
-                "symbol": row.symbol,
-                "base_asset": row.base_asset,
-                "quote_asset": row.quote_asset,
-                "status": row.exchange_status or row.market_status,
-                "spot_trading_allowed": row.is_spot_trading_allowed,
-                "quote_volume_24h": ticker_map.get(row.symbol),
-                "coverage": coverage.get(row.id, {}),
-            }
-            for row in rows
-        ],
-    }
+    return {"count": len(rows), "offset": offset, "limit": limit, "sort": sort, "instruments": [{"symbol": row.symbol, "base_asset": row.base_asset, "quote_asset": row.quote_asset, "status": row.exchange_status or row.market_status, "spot_trading_allowed": row.is_spot_trading_allowed, "quote_volume_24h": ticker_map.get(row.symbol), "coverage": coverage.get(row.id, {})} for row in rows]}
 
 
 @router.post("/instruments/usage")
-def record_market_usage(
-    request: Request,
-    symbol: str = Query(..., min_length=1, max_length=50),
-    db: Session = Depends(get_db),
-):
+def record_market_usage(request: Request, symbol: str = Query(..., min_length=1, max_length=50), db: Session = Depends(get_db)):
     user = require_user(request, db)
     require_permission(user, "market_memory.view")
     normalized = symbol.strip().upper()
-    instrument = db.execute(
-        select(Instrument).where(
-            Instrument.symbol == normalized,
-            Instrument.exchange == "binance",
-            Instrument.provider == "binance",
-            Instrument.is_listed.is_(True),
-            Instrument.is_spot_trading_allowed.is_(True),
-        )
-    ).scalar_one_or_none()
+    instrument = db.execute(select(Instrument).where(Instrument.symbol == normalized, Instrument.exchange == "binance", Instrument.provider == "binance", Instrument.is_listed.is_(True), Instrument.is_spot_trading_allowed.is_(True))).scalar_one_or_none()
     if instrument is None:
         return {"recorded": False}
-
-    db.add(AdminUsageEvent(
-        user_id=user.id,
-        event_type="market_selected",
-        module="market_memory",
-        path="/",
-        metadata_json={"symbol": normalized},
-    ))
+    db.add(AdminUsageEvent(user_id=user.id, event_type="market_selected", module="market_memory", path="/", metadata_json={"symbol": normalized}))
     db.commit()
     return {"recorded": True, "symbol": normalized}
 
