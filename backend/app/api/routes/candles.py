@@ -35,14 +35,14 @@ def get_candles(
         raise HTTPException(status_code=404, detail=f"Instrument not found: {symbol}")
 
     try:
-        # Live chart requests have no time bounds. Refresh only the currently
-        # forming Binance candle so the live chart follows the live quote.
+        # Live chart requests refresh only the currently forming Binance candle.
+        # This keeps the visible chart current without starting a long history job.
         if start_time is None and end_time is None and instrument.provider == "binance":
             refresh_latest_market_candle(symbol=symbol, timeframe=timeframe)
 
-        # Historical requests are bounded and immutable. Query the requested
-        # window first so a small match chart never scans the latest 1000 rows
-        # just to decide whether its bounded data already exists.
+        # Query the requested range directly. Both live and bounded chart paths
+        # need only the candles they render; the ingestion scheduler owns long
+        # history expansion and this request must never launch it.
         candles = candle_repository.get_candles(
             db=db,
             instrument_id=instrument.id,
@@ -66,10 +66,13 @@ def get_candles(
                 and instrument.is_listed
                 and instrument.is_spot_trading_allowed
             ):
+                # Seed only the minimum foreground dataset. Do not submit the
+                # 365-day background downloader from a latency-sensitive chart.
                 ensure_market_data(
                     symbol=symbol,
                     timeframe=timeframe,
                     minimum_candles=required,
+                    background_history=False,
                 )
             else:
                 raise HTTPException(
