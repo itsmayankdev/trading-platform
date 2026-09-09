@@ -25,7 +25,7 @@ const TIMEFRAMES = [
   { value: "15m", label: "15m", detail: "15 minutes" },
   { value: "1h", label: "1H", detail: "1 hour" },
 ];
-const PATTERN_LENGTHS = ["20", "30", "45", "60", "90"];
+const PATTERN_LENGTHS = ["30", "45", "60", "90"];
 const MATCH_COUNTS = ["5", "10", "20", "50"];
 
 const formatPrice = (value: number) =>
