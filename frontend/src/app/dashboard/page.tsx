@@ -20,6 +20,7 @@ const WATCHLIST_KEY = "market-memory-watchlist";
 const DEFAULT_SYMBOL = "ETHUSDT";
 const DASHBOARD_CHART_CANDLES = 240;
 const SEARCH_DEBOUNCE_MS = 180;
+const SEARCH_RESPONSE_CACHE_MAX = 12;
 
 export default function Dashboard() {
   const [symbol, setSymbol] = useState(() => readGlobalMarket(DEFAULT_SYMBOL).symbol);
@@ -40,6 +41,7 @@ export default function Dashboard() {
   const searchAbortRef = useRef<AbortController | null>(null);
   const searchRequestRef = useRef(0);
   const favoriteMatchIndexRef = useRef<number | null>(null);
+  const searchResponseCacheRef = useRef<Map<string, SearchResponse>>(new Map());
 
   useEffect(() => { try { const saved = JSON.parse(window.localStorage.getItem(WATCHLIST_KEY) || "[]"); if (Array.isArray(saved)) setWatchlist(saved.filter((item): item is string => typeof item === "string")); } catch {} }, []);
   function warmChart(value: string, nextTimeframe = timeframe) { void prefetchMarketCandles(value, nextTimeframe, DASHBOARD_CHART_CANDLES).catch(() => {}); }
@@ -52,24 +54,57 @@ export default function Dashboard() {
   useEffect(() => { const onFullscreenChange = () => setChartsFullscreen(document.fullscreenElement === chartWorkspaceRef.current); document.addEventListener("fullscreenchange", onFullscreenChange); return () => document.removeEventListener("fullscreenchange", onFullscreenChange); }, []);
   useEffect(() => { const id = new URLSearchParams(window.location.search).get("favorite"); if (!id) return; const favorite = readFavoritePatterns().find((item) => item.id === id); if (!favorite) return; favoriteMatchIndexRef.current = favorite.matchIndex ?? null; writeGlobalMarket(favorite.symbol, favorite.timeframe); warmChart(favorite.symbol, favorite.timeframe); setSymbol(favorite.symbol); setTimeframe(favorite.timeframe); setPatternLength(String(favorite.patternLength)); setSelectedMatchIndex(favorite.matchIndex ?? 0); }, []);
   async function refreshLiveQuote() { try { const response = await fetch(`/api/backend/api/v1/quote?symbol=${encodeURIComponent(symbol)}`, { credentials: "include", cache: "no-store" }); if (!response.ok) return; const result = await response.json() as { price: number; change_percent_24h: number }; if (typeof result.price !== "number") return; setLiveQuote({ price: result.price, change: result.change_percent_24h ?? 0 }); } catch {} }
-  async function searchPatterns() { const requestedTopK = Number(topK); const requestedPatternLength = Number(patternLength); if (!Number.isInteger(requestedTopK) || requestedTopK < 5 || requestedTopK > 50 || !Number.isInteger(requestedPatternLength) || requestedPatternLength < 5 || requestedPatternLength > 500) return; searchAbortRef.current?.abort(); const controller = new AbortController(); searchAbortRef.current = controller; const requestId = ++searchRequestRef.current; setLoading(true); setError(""); const timeout = window.setTimeout(() => controller.abort(), 30000); try { const params = new URLSearchParams({ symbol, timeframe, pattern_length: String(requestedPatternLength), top_k: String(requestedTopK) }); const response = await fetch(`/api/backend/api/v1/pattern-search?${params.toString()}`, { cache: "no-store", signal: controller.signal }); if (!response.ok) { let message = `Pattern search returned ${response.status}`; try { const body = await response.json(); if (body?.detail) message = body.detail; } catch {} if (requestId === searchRequestRef.current) setError(message); return; } const next = await response.json() as SearchResponse; if (requestId === searchRequestRef.current && !controller.signal.aborted) { setData(next); if (favoriteMatchIndexRef.current != null) { setSelectedMatchIndex(Math.min(favoriteMatchIndexRef.current, Math.max(0, next.matches.length - 1))); favoriteMatchIndexRef.current = null; } } } catch (caught: unknown) { if (controller.signal.aborted) { if (requestId === searchRequestRef.current) setError("Pattern search timed out. Try again or reduce the match count."); return; } if (requestId === searchRequestRef.current) setError(caught instanceof Error ? caught.message : "Could not reach the Pattern Search service. Check that FastAPI is running."); } finally { window.clearTimeout(timeout); if (requestId === searchRequestRef.current) setLoading(false); } }
+  async function searchPatterns() {
+    const requestedTopK = Number(topK);
+    const requestedPatternLength = Number(patternLength);
+    if (!Number.isInteger(requestedTopK) || requestedTopK < 5 || requestedTopK > 50 || !Number.isInteger(requestedPatternLength) || requestedPatternLength < 5 || requestedPatternLength > 500) return;
+    searchAbortRef.current?.abort();
+    const controller = new AbortController();
+    searchAbortRef.current = controller;
+    const requestId = ++searchRequestRef.current;
+    const cacheKey = `${symbol}::${timeframe}::${requestedPatternLength}::${requestedTopK}`;
+    const cachedResponse = searchResponseCacheRef.current.get(cacheKey);
+    if (cachedResponse) {
+      searchResponseCacheRef.current.delete(cacheKey);
+      searchResponseCacheRef.current.set(cacheKey, cachedResponse);
+      setData(cachedResponse);
+      setLoading(false);
+      setError("");
+      return;
+    }
+    setLoading(true);
+    setError("");
+    const timeout = window.setTimeout(() => controller.abort(), 30000);
+    try {
+      const params = new URLSearchParams({ symbol, timeframe, pattern_length: String(requestedPatternLength), top_k: String(requestedTopK) });
+      const response = await fetch(`/api/backend/api/v1/pattern-search?${params.toString()}`, { cache: "no-store", signal: controller.signal });
+      if (!response.ok) {
+        let message = `Pattern search returned ${response.status}`;
+        try { const body = await response.json(); if (body?.detail) message = body.detail; } catch {}
+        if (requestId === searchRequestRef.current) setError(message);
+        return;
+      }
+      const next = await response.json() as SearchResponse;
+      if (requestId === searchRequestRef.current && !controller.signal.aborted) {
+        searchResponseCacheRef.current.delete(cacheKey);
+        searchResponseCacheRef.current.set(cacheKey, next);
+        while (searchResponseCacheRef.current.size > SEARCH_RESPONSE_CACHE_MAX) searchResponseCacheRef.current.delete(searchResponseCacheRef.current.keys().next().value as string);
+        setData(next);
+        if (favoriteMatchIndexRef.current != null) { setSelectedMatchIndex(Math.min(favoriteMatchIndexRef.current, Math.max(0, next.matches.length - 1))); favoriteMatchIndexRef.current = null; }
+      }
+    } catch (caught: unknown) {
+      if (controller.signal.aborted) { if (requestId === searchRequestRef.current) setError("Pattern search timed out. Try again or reduce the match count."); return; }
+      if (requestId === searchRequestRef.current) setError(caught instanceof Error ? caught.message : "Could not reach the Pattern Search service. Check that FastAPI is running.");
+    } finally { window.clearTimeout(timeout); if (requestId === searchRequestRef.current) setLoading(false); }
+  }
   useEffect(() => {
     let active = true;
     const timer = window.setTimeout(async () => {
-      // On a cold market/timeframe switch, let the shared candle request finish
-      // before starting pattern search. This prevents the chart request and
-      // pattern-search data warmup from competing for the same backend work.
       const cached = getMarketCandles(symbol, timeframe);
-      if (!cached || cached.length === 0) {
-        try { await prefetchMarketCandles(symbol, timeframe, DASHBOARD_CHART_CANDLES); } catch {}
-      }
+      if (!cached || cached.length === 0) { try { await prefetchMarketCandles(symbol, timeframe, DASHBOARD_CHART_CANDLES); } catch {} }
       if (active) void searchPatterns();
     }, SEARCH_DEBOUNCE_MS);
-    return () => {
-      active = false;
-      window.clearTimeout(timer);
-      searchAbortRef.current?.abort();
-    };
+    return () => { active = false; window.clearTimeout(timer); searchAbortRef.current?.abort(); };
     // Search is intentionally driven by the four dashboard controls only.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [symbol, timeframe, patternLength, topK]);
