@@ -12,12 +12,13 @@ import PinPatternDialog from "@/components/pattern-search/PinPatternDialog";
 import type { SearchResponse } from "@/components/pattern-search/types";
 import { readFavoritePatterns, type FavoritePattern } from "@/lib/favorites";
 
-const WATCHLIST = ["BTCUSDT", "ETHUSDT", "SOLUSDT"];
 type LiveQuote = { price: number; change: number };
 type PinTarget = Omit<FavoritePattern, "id" | "name" | "createdAt">;
+const WATCHLIST_KEY = "market-memory-watchlist";
+const DEFAULT_SYMBOL = "ETHUSDT";
 
 export default function Dashboard() {
-  const [symbol, setSymbol] = useState("ETHUSDT");
+  const [symbol, setSymbol] = useState(DEFAULT_SYMBOL);
   const [timeframe, setTimeframe] = useState("5m");
   const [patternLength, setPatternLength] = useState("45");
   const [topK, setTopK] = useState("10");
@@ -25,7 +26,7 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [watchlist, setWatchlist] = useState<string[]>(WATCHLIST);
+  const [watchlist, setWatchlist] = useState<string[]>([]);
   const [liveQuote, setLiveQuote] = useState<LiveQuote | null>(null);
   const [highlightLocked, setHighlightLocked] = useState(true);
   const [chartsFullscreen, setChartsFullscreen] = useState(false);
@@ -36,11 +37,23 @@ export default function Dashboard() {
   const searchRequestRef = useRef(0);
   const favoriteMatchIndexRef = useRef<number | null>(null);
 
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(window.localStorage.getItem(WATCHLIST_KEY) || "[]");
+      if (Array.isArray(saved)) setWatchlist(saved.filter((item): item is string => typeof item === "string"));
+    } catch {}
+  }, []);
+
   function selectSymbol(value: string) {
     setSymbol(value);
     setError("");
     setLiveQuote(null);
     setSelectedMatchIndex(0);
+    void fetch(`/api/backend/api/v1/instruments/usage?symbol=${encodeURIComponent(value)}`, {
+      method: "POST",
+      credentials: "include",
+      cache: "no-store",
+    }).catch(() => {});
   }
 
   function changeTimeframe(value: string) {
@@ -64,10 +77,8 @@ export default function Dashboard() {
 
   function toggleWatchlist(value: string) {
     setWatchlist((current) => {
-      const next = current.includes(value) ? current.filter((item) => item !== value) : [...current, value];
-      try {
-        window.localStorage.setItem("market-memory-watchlist", JSON.stringify(next));
-      } catch {}
+      const next = current.includes(value) ? current.filter((item) => item !== value) : [...current, value].slice(-20);
+      try { window.localStorage.setItem(WATCHLIST_KEY, JSON.stringify(next)); } catch {}
       return next;
     });
   }
@@ -101,10 +112,7 @@ export default function Dashboard() {
 
   async function refreshLiveQuote() {
     try {
-      const response = await fetch(`/api/backend/api/v1/quote?symbol=${encodeURIComponent(symbol)}`, {
-        credentials: "include",
-        cache: "no-store",
-      });
+      const response = await fetch(`/api/backend/api/v1/quote?symbol=${encodeURIComponent(symbol)}`, { credentials: "include", cache: "no-store" });
       if (!response.ok) return;
       const result = (await response.json()) as { price: number; change_percent_24h: number };
       if (typeof result.price !== "number") return;
@@ -116,7 +124,6 @@ export default function Dashboard() {
     const requestedTopK = Number(topK);
     const requestedPatternLength = Number(patternLength);
     if (!Number.isInteger(requestedTopK) || requestedTopK < 5 || requestedTopK > 50 || !Number.isInteger(requestedPatternLength) || requestedPatternLength < 5 || requestedPatternLength > 500) return;
-
     searchAbortRef.current?.abort();
     const controller = new AbortController();
     searchAbortRef.current = controller;
@@ -124,16 +131,12 @@ export default function Dashboard() {
     setLoading(true);
     setError("");
     const timeout = window.setTimeout(() => controller.abort(), 30000);
-
     try {
       const params = new URLSearchParams({ symbol, timeframe, pattern_length: String(requestedPatternLength), top_k: String(requestedTopK) });
       const response = await fetch(`/api/backend/api/v1/pattern-search?${params.toString()}`, { cache: "no-store", signal: controller.signal });
       if (!response.ok) {
         let message = `Pattern search returned ${response.status}`;
-        try {
-          const body = await response.json();
-          if (body?.detail) message = body.detail;
-        } catch {}
+        try { const body = await response.json(); if (body?.detail) message = body.detail; } catch {}
         if (requestId === searchRequestRef.current) setError(message);
         return;
       }
@@ -157,21 +160,11 @@ export default function Dashboard() {
     }
   }
 
-  useEffect(() => {
-    const timer = window.setTimeout(() => void searchPatterns(), 250);
-    return () => window.clearTimeout(timer);
-  }, [symbol, timeframe, patternLength, topK]);
-
-  // Keep this dependency array stable across Fast Refresh. The quote endpoint only
-  // needs the symbol, but refreshing when timeframe changes also prevents stale HMR
-  // hook signatures during active development.
+  useEffect(() => { const timer = window.setTimeout(() => void searchPatterns(), 250); return () => window.clearTimeout(timer); }, [symbol, timeframe, patternLength, topK]);
   useEffect(() => {
     const initialTimer = window.setTimeout(() => void refreshLiveQuote(), 0);
     const interval = window.setInterval(() => void refreshLiveQuote(), 10000);
-    return () => {
-      window.clearTimeout(initialTimer);
-      window.clearInterval(interval);
-    };
+    return () => { window.clearTimeout(initialTimer); window.clearInterval(interval); };
   }, [symbol, timeframe]);
 
   function pinCurrent() {
@@ -187,15 +180,7 @@ export default function Dashboard() {
 
   return (
     <main className="min-h-screen bg-[#070a0f] text-white">
-      <header className="sticky top-0 z-40 h-12 border-b border-white/8 bg-[#070a0f]">
-        <div className="flex h-full items-center px-4 sm:px-5">
-          <div className="flex items-center gap-2.5">
-            <div className="flex h-7 w-7 items-center justify-center rounded-md bg-white text-black"><Activity size={15} /></div>
-            <span className="text-xs font-semibold tracking-[0.12em]">MARKET MEMORY</span>
-          </div>
-        </div>
-      </header>
-
+      <header className="sticky top-0 z-40 h-12 border-b border-white/8 bg-[#070a0f]"><div className="flex h-full items-center px-4 sm:px-5"><div className="flex items-center gap-2.5"><div className="flex h-7 w-7 items-center justify-center rounded-md bg-white text-black"><Activity size={15} /></div><span className="text-xs font-semibold tracking-[0.12em]">MARKET MEMORY</span></div></div></header>
       <div className="flex">
         <Sidebar symbol={symbol} collapsed={sidebarCollapsed} onCollapsedChange={setSidebarCollapsed} onSymbolSelect={selectSymbol} selectedSymbols={watchlist} onWatchlistToggle={toggleWatchlist} />
         <div className="min-w-0 flex-1">
@@ -205,18 +190,7 @@ export default function Dashboard() {
             {loading && !data && <div className="grid grid-cols-2 gap-3"><div className="panel h-[440px] animate-pulse" /><div className="panel h-[440px] animate-pulse" /></div>}
             {data && <div className="space-y-3">
               <PatternSummary data={data} />
-              <div ref={chartWorkspaceRef} className={`${chartsFullscreen ? "h-screen bg-[#070a0f] p-3" : ""}`}>
-                <section className="grid h-full min-h-0 grid-cols-2 gap-3">
-                  <section className={`panel overflow-hidden ${chartsFullscreen ? "flex h-full min-h-0 flex-col" : ""}`}>
-                    <div className="flex h-12 shrink-0 items-center justify-between border-b border-white/8 px-3.5">
-                      <div><div className="text-[9px] font-semibold uppercase tracking-[0.14em] text-white/35">Current market</div><div className="mt-0.5 text-xs font-semibold">{data.symbol.replace("USDT", "/USDT")} <span className="text-white/20">·</span> {data.timeframe}</div></div>
-                      <div className="font-mono text-[10px] text-white/30">{data.pattern_length} matched candles</div>
-                    </div>
-                    <MarketChart symbol={data.symbol} timeframe={data.timeframe} patternLength={data.pattern_length} highlightLocked={highlightLocked} dashboardFullscreen={chartsFullscreen} onFullscreenToggle={() => void toggleChartsFullscreen()} onPin={pinCurrent} />
-                  </section>
-                  <HistoricalPatternChart symbol={data.symbol} timeframe={data.timeframe} patternLength={data.pattern_length} matches={data.matches} highlightLocked={highlightLocked} dashboardFullscreen={chartsFullscreen} onFullscreenToggle={() => void toggleChartsFullscreen()} onPin={pinHistorical} selectedIndex={selectedMatchIndex} onSelectedIndexChange={setSelectedMatchIndex} />
-                </section>
-              </div>
+              <div ref={chartWorkspaceRef} className={`${chartsFullscreen ? "h-screen bg-[#070a0f] p-3" : ""}`}><section className="grid h-full min-h-0 grid-cols-2 gap-3"><section className={`panel overflow-hidden ${chartsFullscreen ? "flex h-full min-h-0 flex-col" : ""}`}><div className="flex h-12 shrink-0 items-center justify-between border-b border-white/8 px-3.5"><div><div className="text-[9px] font-semibold uppercase tracking-[0.14em] text-white/35">Current market</div><div className="mt-0.5 text-xs font-semibold">{data.symbol.replace("USDT", "/USDT")} <span className="text-white/20">·</span> {data.timeframe}</div></div><div className="font-mono text-[10px] text-white/30">{data.pattern_length} matched candles</div></div><MarketChart symbol={data.symbol} timeframe={data.timeframe} patternLength={data.pattern_length} highlightLocked={highlightLocked} dashboardFullscreen={chartsFullscreen} onFullscreenToggle={() => void toggleChartsFullscreen()} onPin={pinCurrent} /></section><HistoricalPatternChart symbol={data.symbol} timeframe={data.timeframe} patternLength={data.pattern_length} matches={data.matches} highlightLocked={highlightLocked} dashboardFullscreen={chartsFullscreen} onFullscreenToggle={() => void toggleChartsFullscreen()} onPin={pinHistorical} selectedIndex={selectedMatchIndex} onSelectedIndexChange={setSelectedMatchIndex} /></section></div>
               <OutcomeStatistics statistics={data.statistics} />
               <footer className="flex flex-col gap-1 border-t border-white/6 py-3 text-[9px] uppercase tracking-[0.1em] text-white/18 sm:flex-row sm:items-center sm:justify-between"><span>Algorithm {data.algorithm_version} · Features {data.feature_version}</span><span>Historical outcomes do not guarantee future performance.</span></footer>
             </div>}
