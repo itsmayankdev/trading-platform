@@ -10,6 +10,7 @@ type MarketChartProps = { symbol: string; timeframe: string; patternLength: numb
 const numberFormatter = new Intl.NumberFormat("en-US", { maximumFractionDigits: 4 });
 const candleTimeFormatter = new Intl.DateTimeFormat("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "UTC" });
 const LIVE_REFRESH_MS = 10_000;
+const LIVE_CONTEXT_CANDLES = 30;
 
 function positionPatternBox(chart: IChartApi, box: HTMLDivElement, candles: Candle[], patternLength: number) {
   if (candles.length < patternLength) return;
@@ -48,8 +49,6 @@ export default function MarketChart({ symbol, timeframe, patternLength, highligh
     let retryTimer: number | null = null;
     let liveRefreshTimer: number | null = null;
 
-    // A chart instance is new on every market/timeframe/pattern-length change.
-    // Keep the visible window exactly equal to the selected pattern length.
     renderedSignatureRef.current = "";
     candlesRef.current = [];
     candleByTimeRef.current.clear();
@@ -95,9 +94,10 @@ export default function MarketChart({ symbol, timeframe, patternLength, highligh
 
     function render(allCandles: Candle[]) {
       if (disposed || allCandles.length === 0) return false;
-      // The cache may contain a larger warm dataset. The live chart must only
-      // render the latest N candles selected by the user, not the whole cache.
-      const candles = allCandles.slice(-patternLengthRef.current);
+      // Keep a fixed 30-candle context before the selected live pattern.
+      // Example: 20 selected => 50 visible candles; 45 => 75; 90 => 120.
+      const visibleCount = patternLengthRef.current + LIVE_CONTEXT_CANDLES;
+      const candles = allCandles.slice(-visibleCount);
       if (candles.length === 0) return false;
       const first = candles[0];
       const last = candles[candles.length - 1];
@@ -115,12 +115,13 @@ export default function MarketChart({ symbol, timeframe, patternLength, highligh
 
     async function loadCandles(force: boolean, attempt = 0) {
       if (disposed) return;
+      const requiredCandles = patternLengthRef.current + LIVE_CONTEXT_CANDLES;
       const cached = getMarketCandles(symbol, timeframe);
       if (cached && cached.length > 0) render(cached);
       try {
         const candles = force
-          ? await refreshMarketCandles(symbol, timeframe, patternLengthRef.current)
-          : await prefetchMarketCandles(symbol, timeframe, patternLengthRef.current);
+          ? await refreshMarketCandles(symbol, timeframe, requiredCandles)
+          : await prefetchMarketCandles(symbol, timeframe, requiredCandles);
         if (disposed) return;
         if (candles.length > 0) {
           render(candles);
