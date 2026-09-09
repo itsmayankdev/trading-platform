@@ -7,16 +7,20 @@ from threading import Lock
 from sqlalchemy import text
 
 from backend.app.db.session import SessionLocal
-from market_data.timeframes.utils import TIMEFRAME_MINUTES, floor_to_timeframe
+from backend.app.repositories.candle import CandleRepository
+from backend.app.repositories.instrument import InstrumentRepository
+from market_data.providers.binance import BinanceProvider
+from market_data.quality.validator import CandleValidator
+from market_data.timeframes.utils import TIMEFRAME_MINUTES, floor_to_timeframe, timeframe_delta
 from workers.ingestion.historical import HistoricalDownloader
 
 
 # Only user-selected markets enter this fast lane. Binance discovery remains
 # lightweight; we never pre-download a year for the entire exchange universe.
-_FAST_SEED_DAYS = 7
 _TARGET_HISTORY_DAYS = 365
 _TIMEFRAMES = ("5m", "15m", "1h")
 _MAX_BACKGROUND_WORKERS = 3
+_FAST_SEED_CANDLES = 1000
 
 _executor = ThreadPoolExecutor(max_workers=_MAX_BACKGROUND_WORKERS, thread_name_prefix="market-warmup")
 _lock = Lock()
@@ -58,6 +62,47 @@ def _active_job(symbol: str, timeframe: str) -> bool:
         ).first() is not None
 
 
+def _fast_seed(symbol: str, timeframe: str, minimum_candles: int) -> int:
+    """Fetch one Binance page directly so a new market becomes usable fast.
+
+    This deliberately bypasses the persisted historical-job path. A first-page
+    seed is small enough for the request path; the one-year workload stays in the
+    background. This also makes first-use independent of a worker process.
+    """
+    min_time, max_time, count = _coverage(symbol, timeframe)
+    if count >= minimum_candles:
+        return count
+
+    delta = timeframe_delta(timeframe)
+    end = floor_to_timeframe(datetime.now(timezone.utc), timeframe)
+    start = end - delta * _FAST_SEED_CANDLES
+    candles = BinanceProvider().get_candles(symbol=symbol, timeframe=timeframe, start=start, end=end)
+    candles = [candle for candle in candles if candle.timestamp + delta <= datetime.now(timezone.utc)]
+    if not candles:
+        return count
+
+    validation = CandleValidator().validate(candles=candles, timeframe_minutes=TIMEFRAME_MINUTES[timeframe])
+    if not validation.valid:
+        raise RuntimeError("Fast market seed failed candle validation")
+
+    with SessionLocal() as db:
+        instrument = InstrumentRepository().get_or_create(
+            db=db,
+            symbol=symbol,
+            asset_class="crypto",
+            exchange="binance",
+            provider="binance",
+        )
+        inserted = CandleRepository().insert_many(
+            db=db,
+            instrument_id=instrument.id,
+            timeframe=timeframe,
+            candles=candles,
+        )
+        db.commit()
+    return max(count, inserted)
+
+
 def _run_full_history(symbol: str, timeframe: str) -> None:
     symbol = symbol.upper()
     now = datetime.now(timezone.utc)
@@ -68,8 +113,8 @@ def _run_full_history(symbol: str, timeframe: str) -> None:
     if _active_job(symbol, timeframe):
         return
 
-    # Extend only the missing left edge or right edge. Once a market reaches one
-    # year of history, future runs become tiny incremental updates.
+    # Extend only the missing left edge. If the right edge is stale, the normal
+    # scheduler/incremental ingestion owns that responsibility.
     start = desired_start if min_time is None or min_time > desired_start else min_time
     if max_time is not None and max_time >= end and min_time is not None and min_time <= desired_start:
         return
@@ -101,11 +146,11 @@ def _submit_full_history(symbol: str) -> None:
 
 
 def ensure_market_data(symbol: str, timeframe: str, minimum_candles: int) -> dict[str, object]:
-    """Fast-path a selected market and asynchronously complete one year.
+    """Make a selected market usable immediately and warm it to one year.
 
-    The selected timeframe receives a small recent seed only when it cannot
-    satisfy the requested pattern. Full 365-day history for 5m/15m/1h is then
-    fetched independently in the background.
+    First use performs at most one small Binance page for the requested
+    timeframe. The complete 365-day 5m/15m/1h history is then fetched in
+    independent background workers and only for this selected market.
     """
     symbol = symbol.upper()
     timeframe = timeframe.lower()
@@ -116,17 +161,9 @@ def ensure_market_data(symbol: str, timeframe: str, minimum_candles: int) -> dic
     seeded = False
 
     if count < minimum_candles:
-        now = datetime.now(timezone.utc)
-        seed_end = floor_to_timeframe(now, timeframe)
-        seed_start = floor_to_timeframe(now - timedelta(days=_FAST_SEED_DAYS), timeframe)
-        if not _active_job(symbol, timeframe):
-            HistoricalDownloader().download(
-                symbol=symbol,
-                timeframe=timeframe,
-                start=seed_start,
-                end=seed_end,
-            )
-            seeded = True
+        before = count
+        count = _fast_seed(symbol, timeframe, minimum_candles)
+        seeded = count > before
         min_time, max_time, count = _coverage(symbol, timeframe)
 
     _submit_full_history(symbol)
