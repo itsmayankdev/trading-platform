@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from backend.app.auth.user_auth import require_permission, require_user
 from backend.app.db.session import get_db
 from backend.app.models.instrument import Instrument
-from backend.app.services.instrument_sync import InstrumentSyncService
+from workers.ingestion.instrument_registry import InstrumentRegistrySync
 
 router = APIRouter(prefix="/api/v1", tags=["instruments"])
 
@@ -15,7 +15,13 @@ def list_instruments(request: Request, search: str = Query(default="", max_lengt
     user = require_user(request, db)
     require_permission(user, "market_memory.view")
     q = search.strip().upper()
-    stmt = select(Instrument).where(Instrument.exchange == "binance", Instrument.provider == "binance", Instrument.is_listed.is_(True))
+    stmt = select(Instrument).where(
+        Instrument.exchange == "binance",
+        Instrument.provider == "binance",
+        Instrument.is_enabled.is_(True),
+        Instrument.is_listed.is_(True),
+        Instrument.is_spot_trading_allowed.is_(True),
+    )
     if status.upper() != "ALL":
         stmt = stmt.where(Instrument.market_status == status.upper())
     if quote_asset:
@@ -34,4 +40,4 @@ def list_instruments(request: Request, search: str = Query(default="", max_lengt
 def sync_instruments(request: Request, db: Session = Depends(get_db)):
     user = require_user(request, db)
     require_permission(user, "admin.manage")
-    return InstrumentSyncService().sync_binance_spot(db)
+    return InstrumentRegistrySync().sync()
