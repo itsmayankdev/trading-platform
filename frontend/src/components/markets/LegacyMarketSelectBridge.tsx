@@ -5,7 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 import MarketSelector from "@/components/markets/MarketSelector";
 import { MARKET_CONTEXT_EVENT, normalizeMarketSymbol, readGlobalMarket, writeGlobalMarket } from "@/lib/marketContext";
 
-type Bridge = { host: HTMLDivElement; root: Root; select: HTMLSelectElement };
+type Bridge = { host: HTMLDivElement; root: Root; select: HTMLSelectElement; onGlobal: (event: Event) => void };
 
 function isLegacyMarketSelect(select: HTMLSelectElement) {
   const values = Array.from(select.options).map((option) => option.value.toUpperCase());
@@ -17,85 +17,69 @@ export default function LegacyMarketSelectBridge() {
     const bridges = new Map<HTMLSelectElement, Bridge>();
     let disposed = false;
 
-    const enhance = () => {
-      if (disposed) return;
-      document.querySelectorAll<HTMLSelectElement>("select").forEach((select) => {
-        if (bridges.has(select) || !isLegacyMarketSelect(select)) return;
-        const parent = select.parentElement;
-        if (!parent) return;
+    const enhanceSelect = (select: HTMLSelectElement) => {
+      if (disposed || bridges.has(select) || !isLegacyMarketSelect(select)) return;
+      const parent = select.parentElement;
+      if (!parent) return;
 
-        const host = document.createElement("div");
-        host.className = "mt-1 min-w-[190px] relative";
-        parent.insertBefore(host, select);
-        select.style.display = "none";
+      const host = document.createElement("div");
+      host.className = "mt-1 min-w-[190px] relative";
+      parent.insertBefore(host, select);
+      select.style.display = "none";
 
-        const syncSelect = (symbol: string) => {
-          const normalized = normalizeMarketSymbol(symbol);
-          if (!normalized) return;
-          if (!Array.from(select.options).some((option) => option.value.toUpperCase() === normalized)) {
-            const option = document.createElement("option");
-            option.value = normalized;
-            option.textContent = normalized;
-            select.appendChild(option);
-          }
-          const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")?.set;
-          setter?.call(select, normalized);
-          select.dispatchEvent(new Event("input", { bubbles: true }));
-          select.dispatchEvent(new Event("change", { bubbles: true }));
-        };
+      const syncSelect = (symbol: string) => {
+        const normalized = normalizeMarketSymbol(symbol);
+        if (!normalized) return;
+        if (!Array.from(select.options).some((option) => option.value.toUpperCase() === normalized)) {
+          const option = document.createElement("option");
+          option.value = normalized;
+          option.textContent = normalized;
+          select.appendChild(option);
+        }
+        const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")?.set;
+        setter?.call(select, normalized);
+        select.dispatchEvent(new Event("input", { bubbles: true }));
+        select.dispatchEvent(new Event("change", { bubbles: true }));
+      };
 
-        const root = createRoot(host);
-        root.render(
-          <MarketSelector
-            value={normalizeMarketSymbol(select.value || readGlobalMarket().symbol)}
-            onChange={(symbol) => {
-              const normalized = normalizeMarketSymbol(symbol);
-              if (!normalized) return;
-              writeGlobalMarket(normalized);
-              syncSelect(normalized);
-            }}
-            className="w-full"
-          />,
-        );
+      const onGlobal = (event: Event) => {
+        const detail = event instanceof CustomEvent ? event.detail as { symbol?: string } : undefined;
+        if (detail?.symbol) syncSelect(detail.symbol);
+      };
 
-        const onGlobal = (event: Event) => {
-          const detail = event instanceof CustomEvent ? event.detail as { symbol?: string } : undefined;
-          const next = detail?.symbol;
-          if (next) syncSelect(next);
-        };
-        window.addEventListener(MARKET_CONTEXT_EVENT, onGlobal);
-        bridges.set(select, { host, root, select });
-
-        // Keep the native React select state synchronized when a page changes it programmatically.
-        const observer = new MutationObserver(() => {
-          if (!bridges.has(select)) return;
-          const current = normalizeMarketSymbol(select.value);
-          if (current) writeGlobalMarket(current);
-        });
-        observer.observe(select, { attributes: true, childList: true, subtree: true });
-        (bridges.get(select) as Bridge & { observer?: MutationObserver; onGlobal?: (event: Event) => void }).observer = observer;
-        (bridges.get(select) as Bridge & { observer?: MutationObserver; onGlobal?: (event: Event) => void }).onGlobal = onGlobal;
-      });
+      const root = createRoot(host);
+      root.render(<MarketSelector value={normalizeMarketSymbol(select.value || readGlobalMarket().symbol)} onChange={(next) => { const normalized = normalizeMarketSymbol(next); if (!normalized) return; writeGlobalMarket(normalized); syncSelect(normalized); }} className="w-full" />);
+      window.addEventListener(MARKET_CONTEXT_EVENT, onGlobal);
+      bridges.set(select, { host, root, select, onGlobal });
     };
 
-    const observer = new MutationObserver(enhance);
+    const enhanceAll = () => document.querySelectorAll<HTMLSelectElement>("select").forEach(enhanceSelect);
+    const observer = new MutationObserver((records) => {
+      for (const record of records) {
+        record.addedNodes.forEach((node) => {
+          if (node instanceof HTMLSelectElement) enhanceSelect(node);
+          if (node instanceof Element) node.querySelectorAll<HTMLSelectElement>("select").forEach(enhanceSelect);
+        });
+        record.removedNodes.forEach((node) => {
+          if (!(node instanceof HTMLSelectElement)) return;
+          const bridge = bridges.get(node);
+          if (!bridge) return;
+          window.removeEventListener(MARKET_CONTEXT_EVENT, bridge.onGlobal);
+          bridge.root.unmount();
+          bridge.host.remove();
+          node.style.display = "";
+          bridges.delete(node);
+        });
+      }
+    });
+
+    enhanceAll();
     observer.observe(document.body, { childList: true, subtree: true });
-    const first = window.requestAnimationFrame(enhance);
-    const second = window.setTimeout(enhance, 100);
 
     return () => {
       disposed = true;
-      window.cancelAnimationFrame(first);
-      window.clearTimeout(second);
       observer.disconnect();
-      bridges.forEach((entry) => {
-        const stored = entry as Bridge & { observer?: MutationObserver; onGlobal?: (event: Event) => void };
-        stored.observer?.disconnect();
-        if (stored.onGlobal) window.removeEventListener(MARKET_CONTEXT_EVENT, stored.onGlobal);
-        entry.root.unmount();
-        entry.host.remove();
-        entry.select.style.display = "";
-      });
+      bridges.forEach((entry) => { window.removeEventListener(MARKET_CONTEXT_EVENT, entry.onGlobal); entry.root.unmount(); entry.host.remove(); entry.select.style.display = ""; });
       bridges.clear();
     };
   }, []);
