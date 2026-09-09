@@ -10,6 +10,7 @@ from sqlalchemy import desc, select
 
 from backend.app.db.session import SessionLocal
 from backend.app.models.candle import Candle
+from workers.ingestion.on_demand import ensure_market_data
 
 from pattern_engine.retrieval.numerical import NumericalWindowStore
 from pattern_engine.window import CandlePoint, PatternWindow
@@ -75,7 +76,16 @@ class PatternSearchService:
         rows, cache_hit = _cached_rows(instrument_id, timeframe)
         mark("db_load", started)
         if len(rows) < pattern_length + 1:
-            raise ValueError("Not enough candles to perform pattern search")
+            # Fast lane: fetch only enough recent candles to make the selected
+            # market immediately usable. The one-year history is completed in
+            # the background by ensure_market_data().
+            started = time.perf_counter()
+            ensure_market_data(symbol, timeframe, pattern_length + 1)
+            mark("on_demand_seed", started)
+            rows, cache_hit = _cached_rows(instrument_id, timeframe)
+
+        if len(rows) < pattern_length + 1:
+            raise ValueError("Market data is still warming up; please retry in a moment")
 
         timestamps = [row.timestamp for row in rows]
         closes = [row.close for row in rows]
