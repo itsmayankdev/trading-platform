@@ -1,8 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Activity, BarChart3, Bell, ChevronLeft, ChevronRight, FlaskConical, Globe2, LayoutDashboard, ScanSearch, ShieldCheck, Star, UserRound } from "lucide-react";
-import { createRoot, type Root } from "react-dom/client";
+import { Activity, BarChart3, Bell, ChevronLeft, ChevronRight, FlaskConical, Globe2, LayoutDashboard, ScanSearch, Search, ShieldCheck, Star, UserRound } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import MarketSelector from "@/components/markets/MarketSelector";
@@ -15,6 +14,8 @@ type MenuItem = { label: string; href: string; icon: typeof LayoutDashboard; per
 const MENU: MenuItem[] = [
   { label: "Market Memory", href: "/", icon: LayoutDashboard, permission: "market_memory.use" }, { label: "Pattern Quality", href: "/evidence", icon: BarChart3, permission: "pattern_quality.view" }, { label: "Market Scanner", href: "/scanner", icon: ScanSearch, permission: "scanner.view" }, { label: "Pattern Alerts", href: "/alerts", icon: Bell, permission: "alerts.use" }, { label: "Replay Lab", href: "/replay", icon: Activity, permission: "replay.use" }, { label: "Evaluation Lab", href: "/evaluation", icon: FlaskConical, permission: "evaluation.use" }, { label: "Cross-Market Validation", href: "/validation", icon: Globe2, permission: "validation.use" },
 ];
+
+type LegacyBridge = { host: HTMLDivElement; input: HTMLInputElement; menu: HTMLDivElement; onChange: () => void; timer?: number };
 
 export default function Sidebar({ symbol, collapsed, onCollapsedChange, onSymbolSelect, selectedSymbols, onWatchlistToggle }: SidebarProps) {
   const pathname = usePathname();
@@ -34,42 +35,86 @@ export default function Sidebar({ symbol, collapsed, onCollapsedChange, onSymbol
 
   useEffect(() => { if (!initialized.current || !symbol || symbol === globalSymbol) return; writeGlobalMarket(symbol); setGlobalSymbol(symbol); }, [symbol, globalSymbol]);
 
-  // Migration bridge: legacy module symbol dropdowns are replaced centrally with the same
-  // dynamic market selector. This keeps every module synchronized without per-page lists.
+  // Migration bridge for pages that still use a legacy BTC/ETH/SOL select.
+  // It uses native DOM only, so it never mounts/unmounts a second React root while React renders.
   useEffect(() => {
-    const roots = new Map<HTMLSelectElement, { root: Root; host: HTMLDivElement; onChange: () => void }>();
+    const bridges = new Map<HTMLSelectElement, LegacyBridge>();
     const enhance = () => {
       document.querySelectorAll<HTMLSelectElement>("select").forEach((select) => {
-        if (roots.has(select)) return;
+        if (bridges.has(select)) return;
         const values = Array.from(select.options).map((option) => option.value.toUpperCase());
         if (!(values.includes("BTCUSDT") && values.includes("ETHUSDT") && values.includes("SOLUSDT"))) return;
+        const parent = select.parentElement;
+        if (!parent) return;
         const host = document.createElement("div");
-        host.className = "mt-1 min-w-[190px]";
-        select.parentElement?.insertBefore(host, select);
-        select.style.display = "none";
-        const root = createRoot(host);
-        const onChange = () => {
-          root.render(<MarketSelector value={select.value || readGlobalMarket().symbol} onChange={choose} className="w-full" />);
+        host.className = "mt-1 min-w-[190px] relative";
+        const shell = document.createElement("div");
+        shell.className = "flex h-8 items-center rounded border border-white/10 bg-[#0d1219] px-2 focus-within:border-amber-200/30";
+        const icon = document.createElement("span");
+        icon.className = "mr-1.5 text-white/25";
+        icon.innerHTML = "";
+        const input = document.createElement("input");
+        input.value = select.value || readGlobalMarket().symbol;
+        input.placeholder = "Search Binance Spot market";
+        input.setAttribute("aria-label", "Search Binance Spot market");
+        input.className = "w-full bg-transparent text-[11px] uppercase text-white/80 outline-none placeholder:text-white/20";
+        const menu = document.createElement("div");
+        menu.className = "absolute left-0 top-9 z-50 hidden max-h-64 w-[280px] overflow-auto rounded-md border border-white/10 bg-[#0b1017] p-1 shadow-2xl";
+        shell.appendChild(icon); shell.appendChild(input); host.appendChild(shell); host.appendChild(menu);
+        parent.insertBefore(host, select); select.style.display = "none";
+
+        const renderResults = (items: Array<{ symbol: string; base_asset?: string | null; quote_asset?: string | null; status?: string | null }>) => {
+          menu.replaceChildren();
+          items.forEach((item) => {
+            const button = document.createElement("button");
+            button.type = "button";
+            button.className = "flex w-full items-center justify-between rounded px-2.5 py-2 text-left hover:bg-white/[.05]";
+            const left = document.createElement("span");
+            const name = document.createElement("span"); name.className = "block text-[11px] font-medium text-white/75"; name.textContent = item.symbol;
+            const meta = document.createElement("span"); meta.className = "block text-[9px] text-white/25"; meta.textContent = `${item.base_asset || item.symbol} · ${item.quote_asset || ""}`;
+            left.appendChild(name); left.appendChild(meta);
+            const status = document.createElement("span"); status.className = "text-[8px] uppercase tracking-wider text-emerald-300/55"; status.textContent = item.status || "TRADING";
+            button.appendChild(left); button.appendChild(status);
+            button.addEventListener("mousedown", (event) => event.preventDefault());
+            button.addEventListener("click", () => choose(item.symbol));
+            menu.appendChild(button);
+          });
+          menu.classList.toggle("hidden", items.length === 0);
+        };
+        const search = async () => {
+          const query = input.value.trim().toUpperCase();
+          if (!query) { renderResults([]); return; }
+          try {
+            const response = await fetch(`/api/backend/api/v1/instruments?search=${encodeURIComponent(query)}&limit=12&status=TRADING`, { cache: "no-store" });
+            if (!response.ok) { renderResults([]); return; }
+            const payload = await response.json();
+            renderResults(Array.isArray(payload?.instruments) ? payload.instruments : []);
+          } catch { renderResults([]); }
         };
         const choose = (nextSymbol: string) => {
+          const normalized = nextSymbol.trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+          if (!normalized) return;
           const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")?.set;
-          setter?.call(select, nextSymbol);
+          setter?.call(select, normalized);
+          input.value = normalized;
+          menu.classList.add("hidden");
           select.dispatchEvent(new Event("input", { bubbles: true }));
           select.dispatchEvent(new Event("change", { bubbles: true }));
-          writeGlobalMarket(nextSymbol);
-          window.dispatchEvent(new CustomEvent(MARKET_CONTEXT_EVENT, { detail: { symbol: nextSymbol } }));
+          writeGlobalMarket(normalized);
         };
-        root.render(<MarketSelector value={select.value || readGlobalMarket().symbol} onChange={choose} className="w-full" />);
-        select.addEventListener("change", onChange);
-        roots.set(select, { root, host, onChange });
+        const onInput = () => { if (bridges.get(select)?.timer) window.clearTimeout(bridges.get(select)?.timer); const timer = window.setTimeout(() => void search(), 120); const bridge = bridges.get(select); if (bridge) bridge.timer = timer; menu.classList.remove("hidden"); };
+        const onFocus = () => { if (input.value.trim()) void search(); };
+        const onChange = () => { input.value = select.value || readGlobalMarket().symbol; };
+        input.addEventListener("input", onInput); input.addEventListener("focus", onFocus); select.addEventListener("change", onChange);
+        bridges.set(select, { host, input, menu, onChange });
       });
-      roots.forEach((entry, select) => { if (!document.body.contains(select)) { select.removeEventListener("change", entry.onChange); entry.root.unmount(); entry.host.remove(); roots.delete(select); } });
+      bridges.forEach((entry, select) => { if (!document.body.contains(select)) { select.removeEventListener("change", entry.onChange); if (entry.timer) window.clearTimeout(entry.timer); entry.host.remove(); bridges.delete(select); } });
     };
     enhance();
     const observer = new MutationObserver(enhance);
     observer.observe(document.body, { childList: true, subtree: true });
     const timer = window.setTimeout(enhance, 50);
-    return () => { window.clearTimeout(timer); observer.disconnect(); roots.forEach((entry, select) => { select.removeEventListener("change", entry.onChange); entry.root.unmount(); entry.host.remove(); }); roots.clear(); };
+    return () => { window.clearTimeout(timer); observer.disconnect(); bridges.forEach((entry, select) => { select.removeEventListener("change", entry.onChange); if (entry.timer) window.clearTimeout(entry.timer); entry.host.remove(); }); bridges.clear(); };
   }, [pathname]);
 
   useEffect(() => { let alive = true; Promise.all([fetch("/api/backend/api/v1/admin/session", { cache: "no-store", credentials: "include" }), fetch("/api/backend/api/v1/auth/me", { cache: "no-store", credentials: "include" })]).then(async ([adminResponse, userResponse]) => { const admin = await adminResponse.json().catch(() => ({})); const user = await userResponse.json().catch(() => ({})); if (!alive) return; setOwner(admin?.authenticated === true && admin?.owner === true); setPermissions(Array.isArray(user?.permissions) ? user.permissions : []); }).catch(() => { if (alive) { setOwner(false); setPermissions([]); } }); return () => { alive = false; }; }, [pathname]);
