@@ -33,6 +33,7 @@ export function getMarketCandles(symbol: string, timeframe: string): CachedCandl
 }
 
 function put(symbol: string, timeframe: string, candles: CachedCandle[]) {
+  if (candles.length === 0) return;
   const k = key(symbol, timeframe);
   cache.set(k, { at: Date.now(), candles });
   while (cache.size > MAX_ENTRIES) cache.delete(cache.keys().next().value as string);
