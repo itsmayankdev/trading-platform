@@ -8,7 +8,7 @@ from backend.app.auth.user_auth import require_permission, require_user
 from backend.app.db.session import get_db
 from backend.app.models.candle import Candle
 from backend.app.models.instrument import Instrument
-from market_data.timeframes.utils import TIMEFRAME_MINUTES, timeframe_delta
+from market_data.timeframes.utils import TIMEFRAME_MINUTES
 from workers.ingestion.instrument_registry import InstrumentRegistrySync
 
 router = APIRouter(prefix="/api/v1", tags=["instruments"])
