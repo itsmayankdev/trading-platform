@@ -11,6 +11,7 @@ from backend.app.api.routes.admin import router as admin_router
 from backend.app.api.routes.auth import router as auth_router
 from backend.app.api.routes.telemetry import router as telemetry_router
 from backend.app.api.routes.instruments import router as instruments_router
+from backend.app.api.routes.quote import router as quote_router
 from backend.app.db.init_db import init_db
 from workers.ingestion.instrument_registry import InstrumentRegistrySync
 
@@ -30,6 +31,7 @@ app = FastAPI(title="Trading Platform API", version="0.5.0", docs_url="/docs", r
 app.include_router(auth_router)
 app.include_router(telemetry_router)
 app.include_router(instruments_router)
+app.include_router(quote_router)
 app.include_router(search_router)
 app.include_router(candles_router)
 app.include_router(alerts_router)
