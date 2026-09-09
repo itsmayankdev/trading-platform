@@ -49,8 +49,10 @@ async function loadPermissions() {
 
 export default function Sidebar({ symbol, collapsed, onCollapsedChange, onSymbolSelect }: SidebarProps) {
   const initialized = useRef(false);
-  const [owner, setOwner] = useState(() => readPermissionCache()?.owner ?? false);
-  const [permissions, setPermissions] = useState<string[]>(() => readPermissionCache()?.permissions ?? []);
+  const cachedPermissions = readPermissionCache();
+  const [owner, setOwner] = useState(() => cachedPermissions?.owner ?? false);
+  const [permissions, setPermissions] = useState<string[]>(() => cachedPermissions?.permissions ?? []);
+  const [permissionsReady, setPermissionsReady] = useState(() => Boolean(cachedPermissions));
   const [globalSymbol, setGlobalSymbol] = useState(() => readGlobalMarket(symbol).symbol);
 
   useEffect(() => {
@@ -63,9 +65,7 @@ export default function Sidebar({ symbol, collapsed, onCollapsedChange, onSymbol
 
   useEffect(() => { if (!initialized.current || !symbol || symbol === globalSymbol) return; writeGlobalMarket(symbol); setGlobalSymbol(symbol); }, [symbol, globalSymbol]);
 
-  // One-shot compatibility adapter for legacy module selects. It deliberately
-  // avoids a document-wide MutationObserver and dynamically-created React roots,
-  // both of which made route changes expensive and caused unmount races.
+  // One-shot compatibility adapter. No document-wide observer or dynamic React roots.
   useEffect(() => {
     const bridges = new Map<HTMLSelectElement, LegacyBridge>();
     const enhance = () => {
@@ -97,9 +97,9 @@ export default function Sidebar({ symbol, collapsed, onCollapsedChange, onSymbol
     return () => { window.cancelAnimationFrame(first); window.clearTimeout(second); bridges.forEach((entry, select) => { select.removeEventListener("change", entry.onChange); window.removeEventListener(MARKET_CONTEXT_EVENT, entry.onGlobal); if (entry.timer) window.clearTimeout(entry.timer); entry.host.remove(); select.style.display = ""; }); bridges.clear(); };
   }, []);
 
-  useEffect(() => { let alive = true; void loadPermissions().then((result) => { if (!alive) return; setOwner(result.owner); setPermissions(result.permissions); }); return () => { alive = false; }; }, []);
+  useEffect(() => { let alive = true; void loadPermissions().then((result) => { if (!alive) return; setOwner(result.owner); setPermissions(result.permissions); setPermissionsReady(true); }); return () => { alive = false; }; }, []);
 
-  const allowed = (permission: string) => permissions.includes(permission) || permissions.includes(permission.replace(".use", ".view"));
+  const allowed = (permission: string) => !permissionsReady || permissions.includes(permission) || permissions.includes(permission.replace(".use", ".view"));
   const selectMarket = (nextSymbol: string) => { const normalized = nextSymbol.trim().toUpperCase().replace(/[^A-Z0-9]/g, ""); if (!normalized) return; writeGlobalMarket(normalized); setGlobalSymbol(normalized); onSymbolSelect(normalized); };
   const itemClass = (href: string) => `flex items-center gap-2 rounded-md px-2.5 py-2 text-[10px] font-medium transition text-white/45 hover:bg-white/[0.03] hover:text-white/70 ${collapsed ? "justify-center px-0" : ""}`;
 
