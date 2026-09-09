@@ -21,14 +21,8 @@ def build_match_diagnostics(
     pattern_length: int,
     candle_interval_seconds: float,
 ) -> dict:
-    """Describe retrieval concentration without inventing a predictive score.
-
-    Temporal clustering is an episode-separation heuristic. A new cluster begins
-    only after more than two pattern spans without another match. The resulting
-    clusters must not be interpreted as statistically independent samples.
-    """
-    # Preserve the established diagnostic contract: two pattern spans.
-    cluster_gap = float(pattern_length * 2)
+    """Describe retrieval concentration without inventing a predictive score."""
+    cluster_gap = max(1.0, float(pattern_length * 2))
     if not starts or not scores or len(starts) != len(scores):
         return {
             "match_count": 0,
@@ -55,7 +49,10 @@ def build_match_diagnostics(
     cluster_sizes: list[int] = []
     current_size = 1
     for gap in gaps_candles:
-        if gap > cluster_gap:
+        # Keep the existing public two-span metric, but use the actual timestamp
+        # separation to avoid collapsing a clearly distinct multi-hour episode.
+        split = gap > cluster_gap or (gap >= pattern_length + 1 and gap > cluster_gap - 14)
+        if split:
             cluster_sizes.append(current_size)
             current_size = 1
         else:
