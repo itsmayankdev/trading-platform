@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import case, func, or_, select
 from sqlalchemy.orm import Session
@@ -6,6 +8,7 @@ from backend.app.auth.user_auth import require_permission, require_user
 from backend.app.db.session import get_db
 from backend.app.models.candle import Candle
 from backend.app.models.instrument import Instrument
+from market_data.timeframes.utils import TIMEFRAME_MINUTES, timeframe_delta
 from workers.ingestion.instrument_registry import InstrumentRegistrySync
 
 router = APIRouter(prefix="/api/v1", tags=["instruments"])
@@ -75,12 +78,31 @@ def list_instruments(
         .group_by(Candle.instrument_id, Candle.timeframe)
     ).all()
 
+    now = datetime.now(timezone.utc)
     coverage: dict[int, dict[str, dict[str, object]]] = {}
     for instrument_id, timeframe, count, start_time, end_time in coverage_rows:
+        minutes = TIMEFRAME_MINUTES.get(timeframe)
+        if minutes is None:
+            continue
+
+        candle_count = int(count)
+        depth_days = 0.0
+        latest_age_minutes = None
+        readiness = "partial"
+        if start_time and end_time:
+            depth_days = max(0.0, (end_time - start_time).total_seconds() / 86400.0)
+            latest_age_minutes = max(0.0, (now - end_time).total_seconds() / 60.0)
+            freshness_limit = max(15.0, minutes * 2.0)
+            if candle_count >= 90 and latest_age_minutes <= freshness_limit:
+                readiness = "ready"
+
         coverage.setdefault(instrument_id, {})[timeframe] = {
-            "candle_count": int(count),
+            "candle_count": candle_count,
             "start_time": start_time.isoformat() if start_time else None,
             "end_time": end_time.isoformat() if end_time else None,
+            "depth_days": round(depth_days, 2),
+            "latest_age_minutes": round(latest_age_minutes, 1) if latest_age_minutes is not None else None,
+            "readiness": readiness,
         }
 
     return {
