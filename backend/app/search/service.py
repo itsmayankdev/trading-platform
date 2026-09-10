@@ -24,19 +24,13 @@ _CACHE_TTL_SECONDS = 30.0
 _RESULT_CACHE_MAX_ENTRIES = 12
 _RESULT_CACHE_TTL_SECONDS = 10.0
 _NUMERICAL_CACHE: OrderedDict[tuple[int, str], tuple[float, object, object, tuple]] = OrderedDict()
-_RESULT_CACHE: OrderedDict[tuple[int, str, int, int], tuple[float, object, object, dict]] = OrderedDict()
+_RESULT_CACHE: OrderedDict[tuple[int, str, int, int, str], tuple[float, object, object, dict]] = OrderedDict()
 _CACHE_LOCK = Lock()
 
 
 def _cached_numerical_rows(instrument_id: int, timeframe: str) -> tuple[tuple, bool]:
     key = (instrument_id, timeframe)
     now = time.monotonic()
-
-    # Fast path: searches for different pattern lengths should reuse the same
-    # in-memory candle snapshot instead of hitting PostgreSQL on every request.
-    # The snapshot is intentionally short-lived so normal live-data updates are
-    # picked up automatically without making the search endpoint latency-bound
-    # by a latest-row query on every request.
     with _CACHE_LOCK:
         cached = _NUMERICAL_CACHE.get(key)
         if cached is not None:
@@ -46,30 +40,18 @@ def _cached_numerical_rows(instrument_id: int, timeframe: str) -> tuple[tuple, b
                 return cached_rows, True
 
     with SessionLocal() as db:
-        latest = db.execute(
-            select(Candle.timestamp, Candle.close)
-            .where(Candle.instrument_id == instrument_id, Candle.timeframe == timeframe)
-            .order_by(desc(Candle.timestamp)).limit(1)
-        ).first()
+        latest = db.execute(select(Candle.timestamp, Candle.close).where(Candle.instrument_id == instrument_id, Candle.timeframe == timeframe).order_by(desc(Candle.timestamp)).limit(1)).first()
         if latest is None:
             return (), False
         latest_timestamp, latest_close = latest
-
         with _CACHE_LOCK:
-            # Another request may have populated the snapshot while this request
-            # was waiting for a DB connection. Reuse it if it is still fresh.
             cached = _NUMERICAL_CACHE.get(key)
             if cached is not None:
                 cached_at, cached_timestamp, cached_close, cached_rows = cached
                 if now - cached_at <= _CACHE_TTL_SECONDS:
                     _NUMERICAL_CACHE.move_to_end(key)
                     return cached_rows, True
-
-        rows = tuple(db.execute(
-            select(Candle.timestamp, Candle.open, Candle.high, Candle.low, Candle.close, Candle.volume)
-            .where(Candle.instrument_id == instrument_id, Candle.timeframe == timeframe)
-            .order_by(Candle.timestamp.asc())
-        ).all())
+        rows = tuple(db.execute(select(Candle.timestamp, Candle.open, Candle.high, Candle.low, Candle.close, Candle.volume).where(Candle.instrument_id == instrument_id, Candle.timeframe == timeframe).order_by(Candle.timestamp.asc())).all())
         with _CACHE_LOCK:
             _NUMERICAL_CACHE[key] = (now, latest_timestamp, latest_close, rows)
             _NUMERICAL_CACHE.move_to_end(key)
@@ -78,7 +60,7 @@ def _cached_numerical_rows(instrument_id: int, timeframe: str) -> tuple[tuple, b
         return rows, False
 
 
-def _get_cached_result(key: tuple[int, str, int, int], latest_timestamp, latest_close):
+def _get_cached_result(key: tuple[int, str, int, int, str], latest_timestamp, latest_close):
     now = time.monotonic()
     with _CACHE_LOCK:
         cached = _RESULT_CACHE.get(key)
@@ -92,7 +74,7 @@ def _get_cached_result(key: tuple[int, str, int, int], latest_timestamp, latest_
         return response
 
 
-def _put_cached_result(key: tuple[int, str, int, int], latest_timestamp, latest_close, response: dict) -> None:
+def _put_cached_result(key: tuple[int, str, int, int, str], latest_timestamp, latest_close, response: dict) -> None:
     with _CACHE_LOCK:
         _RESULT_CACHE[key] = (time.monotonic(), latest_timestamp, latest_close, response)
         _RESULT_CACHE.move_to_end(key)
@@ -104,31 +86,20 @@ def _window_from_rows(symbol: str, timeframe: str, rows, start_index: int, lengt
     selected = rows[start_index:start_index + length]
     if len(selected) != length:
         raise ValueError("Insufficient candles for historical pattern window")
-    return PatternWindow(
-        symbol=symbol,
-        timeframe=timeframe,
-        start_time=selected[0].timestamp,
-        end_time=selected[-1].timestamp,
-        candles=tuple(CandlePoint(timestamp=r.timestamp, open=r.open, high=r.high, low=r.low, close=r.close, volume=r.volume) for r in selected),
-    )
+    return PatternWindow(symbol=symbol, timeframe=timeframe, start_time=selected[0].timestamp, end_time=selected[-1].timestamp, candles=tuple(CandlePoint(timestamp=r.timestamp, open=r.open, high=r.high, low=r.low, close=r.close, volume=r.volume) for r in selected))
 
 
 class PatternSearchService:
     def search(self, instrument_id: int, symbol: str, timeframe: str, pattern_length: int = 45, top_k: int = 10):
         profile = os.getenv("PATTERN_SEARCH_PROFILE", "false").lower() == "true"
         timings: dict[str, float] = {}
-
         def mark(name: str, started: float) -> None:
             if profile:
                 timings[name] = time.perf_counter() - started
 
         started = time.perf_counter()
-        # Pattern search is latency-sensitive. It only requires enough candles to
-        # execute the search; full-history expansion is owned by the ingestion
-        # scheduler/background workers rather than this request.
         ensure_market_data(symbol, timeframe, pattern_length + 1, background_history=False)
         mark("warmup_check", started)
-
         started = time.perf_counter()
         rows, cache_hit = _cached_numerical_rows(instrument_id, timeframe)
         mark("numerical_db_load", started)
@@ -136,7 +107,8 @@ class PatternSearchService:
             raise ValueError("Market data is still warming up; please retry in a moment")
 
         latest_timestamp, latest_close = rows[-1].timestamp, rows[-1].close
-        result_key = (instrument_id, timeframe, pattern_length, top_k)
+        ranker = PatternRanker()
+        result_key = (instrument_id, timeframe, pattern_length, top_k, ranker.algorithm.version)
         cached_result = _get_cached_result(result_key, latest_timestamp, latest_close)
         if cached_result is not None:
             return cached_result
@@ -144,23 +116,14 @@ class PatternSearchService:
         timestamps = [row.timestamp for row in rows]
         closes = [row.close for row in rows]
         timestamp_to_index = {timestamp: index for index, timestamp in enumerate(timestamps)}
-
         started = time.perf_counter()
         current = _window_from_rows(symbol, timeframe, rows, len(rows) - pattern_length, pattern_length)
         mark("current_pattern", started)
-
         started = time.perf_counter()
         store = NumericalWindowStore.from_columns(timestamps=timestamps, closes=closes, window_length=pattern_length)
         mark("numerical_store", started)
-
         started = time.perf_counter()
-        ranker = PatternRanker()
-        matches = ranker.rank_numerical_v1(
-            current=current,
-            store=store,
-            top_k=top_k,
-            min_separation_candles=pattern_length,
-        )
+        matches = ranker.rank_numerical_v1(current=current, store=store, top_k=top_k, min_separation_candles=pattern_length)
         mark("ranking", started)
 
         started = time.perf_counter()
@@ -176,17 +139,11 @@ class PatternSearchService:
             future = [CandlePoint(timestamp=r.timestamp, open=r.open, high=r.high, low=r.low, close=r.close, volume=r.volume) for r in future_rows]
             outcomes = calculate_outcomes(match=matched_window, future_candles=future)
             all_outcomes.extend(outcomes)
-
             entry_close = matched_window.candles[-1].close
             path_values = [0.0]
             path_values.extend((r.close / entry_close - 1.0) if entry_close else 0.0 for r in future_rows)
             forward_paths.append({"match_index": match_index, "similarity_score": round(match.similarity_score * 100, 4), "values": path_values})
-            match_results.append({
-                "start_time": match.start_time,
-                "end_time": match.end_time,
-                "similarity_score": round(match.similarity_score * 100, 4),
-                "outcomes": [{"horizon_candles": o.horizon_candles, "forward_return": o.forward_return, "mfe": o.mfe, "mae": o.mae} for o in outcomes],
-            })
+            match_results.append({"start_time": match.start_time, "end_time": match.end_time, "similarity_score": round(match.similarity_score * 100, 4), "outcomes": [{"horizon_candles": o.horizon_candles, "forward_return": o.forward_return, "mfe": o.mfe, "mae": o.mae} for o in outcomes]})
         mark("match_details", started)
 
         started = time.perf_counter()
@@ -195,18 +152,7 @@ class PatternSearchService:
         match_scores = [match.similarity_score for match in matches]
         intervals = [(timestamps[i + 1] - timestamps[i]).total_seconds() for i in range(min(len(timestamps) - 1, 1000)) if (timestamps[i + 1] - timestamps[i]).total_seconds() > 0]
         diagnostics = build_match_diagnostics(starts=match_starts, scores=match_scores, pattern_length=pattern_length, candle_interval_seconds=median(intervals) if intervals else 60.0)
-        response = {
-            "symbol": symbol,
-            "timeframe": timeframe,
-            "pattern_length": pattern_length,
-            "algorithm_version": ranker.algorithm.version,
-            "feature_version": ranker.algorithm.feature_version,
-            "current_pattern": {"start_time": current.start_time, "end_time": current.end_time},
-            "matches": match_results,
-            "statistics": [{"horizon_candles": s.horizon_candles, "sample_size": s.sample_size, "mean_return": s.mean_return, "median_return": s.median_return, "win_rate": s.win_rate, "mean_mfe": s.mean_mfe, "mean_mae": s.mean_mae} for s in statistics],
-            "forward_paths": forward_paths,
-            "quality_diagnostics": diagnostics,
-        }
+        response = {"symbol": symbol, "timeframe": timeframe, "pattern_length": pattern_length, "algorithm_version": ranker.algorithm.version, "feature_version": ranker.algorithm.feature_version, "current_pattern": {"start_time": current.start_time, "end_time": current.end_time}, "matches": match_results, "statistics": [{"horizon_candles": s.horizon_candles, "sample_size": s.sample_size, "mean_return": s.mean_return, "median_return": s.median_return, "win_rate": s.win_rate, "mean_mfe": s.mean_mfe, "mean_mae": s.mean_mae} for s in statistics], "forward_paths": forward_paths, "quality_diagnostics": diagnostics}
         mark("response_build", started)
         _put_cached_result(result_key, latest_timestamp, latest_close, response)
         if profile:
