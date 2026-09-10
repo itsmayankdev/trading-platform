@@ -146,36 +146,13 @@ class PatternSearchService:
 
         started = time.perf_counter()
         ranker = PatternRanker()
-        candidate_count = min(max(top_k * 3, top_k), 50)
         candidates = ranker.rank_numerical_v1(
             current=current,
             store=store,
-            top_k=candidate_count,
+            top_k=top_k,
             min_separation_candles=pattern_length,
         )
-
-        current_closes = [row.close for row in rows[-pattern_length:]]
-        validated = []
-        for match in candidates:
-            start_index = timestamp_to_index.get(match.start_time)
-            if start_index is None:
-                continue
-            historical_closes = [row.close for row in rows[start_index:start_index + pattern_length]]
-            agreement = directional_agreement(current_closes, historical_closes)
-            if not passes_shape_validation(agreement):
-                continue
-            calibrated = calibrated_similarity(match.similarity_score, agreement)
-            validated.append((match, agreement, calibrated))
-
-        validated.sort(key=lambda item: item[2], reverse=True)
-        matches = []
-        separation = pattern_length
-        for match, agreement, calibrated in validated:
-            if any(abs(match.start_time - selected.start_time) < (timestamps[1] - timestamps[0]) * separation for selected in matches) if len(timestamps) >= 2 else False:
-                continue
-            matches.append(type(match)(start_time=match.start_time, end_time=match.end_time, similarity_score=calibrated))
-            if len(matches) >= top_k:
-                break
+        matches = candidates
         mark("ranking", started)
 
         started = time.perf_counter()
