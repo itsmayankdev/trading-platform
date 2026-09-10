@@ -4,6 +4,7 @@ from pattern_engine.algorithms.v1 import SimilarityV1
 from pattern_engine.algorithms.v2 import SimilarityV2
 from pattern_engine.algorithms.v3 import SimilarityV3
 from pattern_engine.algorithms.v4 import SimilarityV4
+from pattern_engine.algorithms.v5 import SimilarityV5
 
 
 _ALGORITHMS = {
@@ -11,11 +12,12 @@ _ALGORITHMS = {
     SimilarityV2.version: SimilarityV2,
     SimilarityV3.version: SimilarityV3,
     SimilarityV4.version: SimilarityV4,
+    SimilarityV5.version: SimilarityV5,
 }
 
-# 1st-update-MNBH is the new strict production candidate. V1 remains frozen
-# and directly available for rollback/comparison; its source is unchanged.
-PRODUCTION_ALGORITHM_VERSION = SimilarityV4.version
+# 2nd-update-HFDS: production matcher is the supplied fast 100k reference
+# engine port. V1 remains frozen and directly available for rollback/comparison.
+PRODUCTION_ALGORITHM_VERSION = SimilarityV5.version
 
 
 def get_algorithm(version: str | None = None):
