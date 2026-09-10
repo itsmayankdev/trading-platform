@@ -3,37 +3,62 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { LogOut, Settings, UserRound } from "lucide-react";
-import { useAuth } from "@/components/auth/AuthProvider";
+
+type SessionUser = { authenticated: true; display_name?: string; email?: string };
+
+async function readSession(): Promise<SessionUser | null> {
+  try {
+    const response = await fetch("/api/backend/api/v1/auth/session", { credentials: "include", cache: "no-store" });
+    if (!response.ok) return null;
+    const data = await response.json();
+    return data?.authenticated ? data as SessionUser : null;
+  } catch {
+    return null;
+  }
+}
 
 export default function AccountMenu() {
-  const { user, loading, clear } = useAuth();
+  const [user, setUser] = useState<SessionUser | null>(null);
+  const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    let alive = true;
+    const sync = async () => {
+      const next = await readSession();
+      if (!alive) return;
+      setUser(next);
+      setLoading(false);
+      if (!next) setOpen(false);
+    };
+    void sync();
+    const interval = window.setInterval(() => { void sync(); }, 5000);
+    return () => { alive = false; window.clearInterval(interval); };
+  }, []);
+
+  useEffect(() => {
     if (!open) return;
-    const onPointerDown = (event: MouseEvent) => { if (ref.current && !ref.current.contains(event.target as Node)) setOpen(false); };
+    const onPointerDown = (event: MouseEvent) => {
+      if (ref.current && !ref.current.contains(event.target as Node)) setOpen(false);
+    };
     document.addEventListener("mousedown", onPointerDown);
     return () => document.removeEventListener("mousedown", onPointerDown);
   }, [open]);
 
   async function signOut() {
     setBusy(true);
+    setUser(null);
+    setOpen(false);
     try {
-      const response = await fetch("/api/backend/api/v1/auth/logout", { method: "POST", credentials: "include", cache: "no-store" });
-      if (!response.ok) throw new Error("Logout failed");
-    } catch {
-      // Clear the client state even if the server request fails; protected routes will re-check the session.
+      await fetch("/api/backend/api/v1/auth/logout", { method: "POST", credentials: "include", cache: "no-store" });
     } finally {
-      clear();
-      setOpen(false);
       window.location.replace("/login");
     }
   }
 
-  // Never render account identity or an account button while the authentication state is
-  // unknown or unauthenticated. This prevents stale identity from surviving logout/navigation.
+  // Account identity is never rendered while the session is unknown or unauthenticated.
   if (loading || !user) return null;
 
   return <div ref={ref} className="relative">
