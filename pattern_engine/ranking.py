@@ -44,13 +44,15 @@ class PatternRanker:
         """Compatibility entry point; the registry-selected numerical matcher is used."""
         if top_k <= 0:
             return []
-        separation = min_separation_candles or current.length
         if self.algorithm.version == "similarity_v1":
+            separation = min_separation_candles or current.length
             ranked = store.rank_v1(current.start_time, top_k, separation)
         elif self.algorithm.version == "similarity_v4":
+            separation = min_separation_candles or current.length
             ranked = store.rank_v4(current.start_time, top_k, separation)
         elif self.algorithm.version == "similarity_v5":
-            ranked = store.rank_v5(current.start_time, top_k, separation)
+            # Exact supplied reference engine constant: MIN_GAP = 50.
+            ranked = store.rank_v5(current.start_time, top_k, 50)
         else:
             raise ValueError(f"Numerical retrieval does not support {self.algorithm.version}")
         return [
