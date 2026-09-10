@@ -18,7 +18,6 @@ class SimilarityV5:
     DIST_BASE = 1.4
     MIN_SIM = 0.80
     MAX_SIM = 0.995
-    FOLLOW_BARS = 60
 
     def score(self, current: PatternWindow, historical: PatternWindow) -> float:
         if current.length != historical.length:
@@ -61,15 +60,3 @@ class SimilarityV5:
         maximum = float(np.max(closes))
         rng = maximum - minimum or 1.0
         return (closes - minimum) / rng
-
-    @staticmethod
-    def normalize_array(closes: np.ndarray) -> np.ndarray:
-        values = np.asarray(closes, dtype=np.float64)
-        if values.ndim != 1 or values.size == 0:
-            raise ValueError("Expected a non-empty one-dimensional close path")
-        if np.any(~np.isfinite(values)) or np.any(values <= 0):
-            raise ValueError("Window contains invalid close prices")
-        minimum = float(np.min(values))
-        maximum = float(np.max(values))
-        rng = maximum - minimum or 1.0
-        return (values - minimum) / rng
