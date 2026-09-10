@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass, field
 from threading import BoundedSemaphore, Event, Lock
 from typing import Callable, TypeVar
 
@@ -8,8 +9,16 @@ T = TypeVar("T")
 
 _MAX_CONCURRENCY = max(1, int(os.getenv("PATTERN_SEARCH_MAX_CONCURRENCY", "2")))
 _SEARCH_SEMAPHORE = BoundedSemaphore(_MAX_CONCURRENCY)
-_INFLIGHT: dict[tuple, Event] = {}
-_INFLIGHT_RESULTS: dict[tuple, tuple[bool, object]] = {}
+
+
+@dataclass
+class _Flight:
+    event: Event = field(default_factory=Event)
+    succeeded: bool = False
+    value: object = None
+
+
+_INFLIGHT: dict[tuple, _Flight] = {}
 _INFLIGHT_LOCK = Lock()
 
 
@@ -20,33 +29,31 @@ def run_pattern_search(key: tuple, search: Callable[[], T]) -> T:
     never the V1 ranking algorithm or its numerical inputs.
     """
     with _INFLIGHT_LOCK:
-        event = _INFLIGHT.get(key)
-        if event is None:
-            event = Event()
-            _INFLIGHT[key] = event
+        flight = _INFLIGHT.get(key)
+        if flight is None:
+            flight = _Flight()
+            _INFLIGHT[key] = flight
             owner = True
         else:
             owner = False
 
     if not owner:
-        event.wait()
-        with _INFLIGHT_LOCK:
-            succeeded, value = _INFLIGHT_RESULTS.pop(key, (False, RuntimeError("Pattern search did not complete")))
-        if succeeded:
-            return value  # type: ignore[return-value]
-        raise value  # type: ignore[misc]
+        flight.event.wait()
+        if flight.succeeded:
+            return flight.value  # type: ignore[return-value]
+        raise flight.value  # type: ignore[misc]
 
     try:
         with _SEARCH_SEMAPHORE:
             result = search()
-        with _INFLIGHT_LOCK:
-            _INFLIGHT_RESULTS[key] = (True, result)
+        flight.succeeded = True
+        flight.value = result
         return result
     except BaseException as exc:
-        with _INFLIGHT_LOCK:
-            _INFLIGHT_RESULTS[key] = (False, exc)
+        flight.value = exc
         raise
     finally:
+        flight.event.set()
         with _INFLIGHT_LOCK:
-            _INFLIGHT.pop(key, None)
-        event.set()
+            if _INFLIGHT.get(key) is flight:
+                _INFLIGHT.pop(key, None)
