@@ -26,7 +26,6 @@ export default function AuthProvider({ children }: { children: React.ReactNode }
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
-    setLoading(true);
     const next = await readSession();
     setUser(next);
     setLoading(false);
@@ -44,7 +43,8 @@ export default function AuthProvider({ children }: { children: React.ReactNode }
     void sync();
     const onAuthChanged = () => { void refresh(); };
     window.addEventListener(AUTH_CHANGED_EVENT, onAuthChanged);
-    return () => { alive = false; window.removeEventListener(AUTH_CHANGED_EVENT, onAuthChanged); };
+    const interval = window.setInterval(() => { void refresh(); }, 5000);
+    return () => { alive = false; window.clearInterval(interval); window.removeEventListener(AUTH_CHANGED_EVENT, onAuthChanged); };
   }, [refresh]);
 
   const value = useMemo(() => ({ user, loading, refresh, clear }), [user, loading, refresh, clear]);
