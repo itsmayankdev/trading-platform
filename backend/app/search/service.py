@@ -18,7 +18,7 @@ from pattern_engine.ranking import PatternRanker
 from pattern_engine.outcomes import calculate_outcomes
 from pattern_engine.statistics import calculate_statistics
 from pattern_engine.diagnostics import build_match_diagnostics
-from pattern_engine.shape_validation import calibrated_similarity, directional_agreement, passes_shape_validation
+from pattern_engine.shape_validation import calibrated_similarity, directional_agreement, path_shape_similarity, passes_shape_validation
 
 _CACHE_MAX_ENTRIES = 16
 _CACHE_TTL_SECONDS = 30.0
@@ -162,15 +162,16 @@ class PatternSearchService:
                 continue
             historical_closes = [row.close for row in rows[start_index:start_index + pattern_length]]
             agreement = directional_agreement(current_closes, historical_closes)
-            if not passes_shape_validation(agreement):
+            shape_score = path_shape_similarity(current_closes, historical_closes)
+            if not passes_shape_validation(agreement, shape_score):
                 continue
-            calibrated = calibrated_similarity(match.similarity_score, agreement)
-            validated.append((match, agreement, calibrated))
+            calibrated = calibrated_similarity(match.similarity_score, agreement, shape_score)
+            validated.append((match, agreement, shape_score, calibrated))
 
-        validated.sort(key=lambda item: item[2], reverse=True)
+        validated.sort(key=lambda item: item[3], reverse=True)
         matches = []
         separation = pattern_length
-        for match, agreement, calibrated in validated:
+        for match, agreement, shape_score, calibrated in validated:
             if any(abs(match.start_time - selected.start_time) < (timestamps[1] - timestamps[0]) * separation for selected in matches) if len(timestamps) >= 2 else False:
                 continue
             matches.append(type(match)(start_time=match.start_time, end_time=match.end_time, similarity_score=calibrated))
