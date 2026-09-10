@@ -72,7 +72,7 @@ class NumericalWindowStore:
         ends = self.window_end_times()
         eligible = np.asarray(ends < current_start_time, dtype=bool)
         original_indices = np.flatnonzero(eligible)
-        return starts[eligible], original_indices
+        return starts[eligible], original_indices, eligible
 
     def _select_separated(
         self,
@@ -156,7 +156,7 @@ class NumericalWindowStore:
         if top_k <= 0:
             return []
 
-        starts, original_indices = self._eligible_windows(current_start_time)
+        starts, original_indices, eligible = self._eligible_windows(current_start_time)
         if len(starts) == 0:
             return []
 
@@ -166,14 +166,9 @@ class NumericalWindowStore:
         scores = np.empty(len(starts), dtype=np.float64)
 
         chunk_size = 25_000
-        eligible_positions = np.flatnonzero(
-            np.asarray(self.window_end_times() < current_start_time, dtype=bool)
-        )
+        eligible_positions = np.flatnonzero(eligible)
         for chunk_start in range(0, len(eligible_positions), chunk_size):
             positions = eligible_positions[chunk_start : chunk_start + chunk_size]
-            normalized = windows[positions] / windows[positions, :, None][:, :, 0:1] if False else None
-            # The expression above is intentionally avoided; normalize directly
-            # from the first close of each candidate window.
             chunk = windows[positions]
             normalized = chunk / chunk[:, :1] - 1.0
             scores[chunk_start : chunk_start + len(positions)] = SimilarityV4.score_paths(
