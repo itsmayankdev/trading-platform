@@ -15,8 +15,7 @@ def pattern_search(request:Request,symbol:str=Query(default="ETHUSDT",min_length
         plan,used,limit=check_search_limit(db,user,timeframe,top_k)
         result=service.search(instrument_id=instrument.id,symbol=symbol,timeframe=timeframe,pattern_length=pattern_length,top_k=top_k)
         record_search(db,user,symbol,timeframe,pattern_length,top_k)
-        if isinstance(result,dict):
-            result["plan"]={"code":plan.code,"name":plan.name,"status":user.plan_status,"searches_today":used+1,"search_limit":limit}
+        if isinstance(result,dict):result["plan"]={"code":plan.code,"name":plan.name,"status":user.plan_status,"searches_today":used+1,"search_limit":limit}
         return result
     except PermissionError as exc:raise HTTPException(status_code=429,detail=str(exc))
     except ValueError as exc:raise HTTPException(status_code=400,detail=str(exc))
