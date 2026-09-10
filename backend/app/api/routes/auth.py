@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session, selectinload
 from backend.app.auth.user_auth import clear_user_cookie, get_current_user, hash_password, require_user, set_user_cookie, verify_password
 from backend.app.db.session import get_db
 from backend.app.models.admin import AdminPlan, AdminRole, AdminUser
-from backend.app.services.plan_service import activate_registration_plan, effective_limits, effective_plan, search_usage
+from backend.app.plan_service import activate_registration_plan, effective_limits, effective_plan, search_usage
 router=APIRouter(prefix="/api/v1/auth",tags=["auth"])
 
 def _load_user(db:Session,user_id:int):
