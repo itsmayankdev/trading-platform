@@ -5,6 +5,7 @@ from datetime import datetime
 import numpy as np
 
 from pattern_engine.window import CandlePoint
+from pattern_engine.algorithms.v4 import SimilarityV4
 
 
 class NumericalWindowStore:
@@ -66,18 +67,53 @@ class NumericalWindowStore:
     def current_start_time(self):
         return self.timestamps[-self.window_length]
 
+    def _eligible_windows(self, current_start_time: datetime):
+        starts = self.window_start_times()
+        ends = self.window_end_times()
+        eligible = np.asarray(ends < current_start_time, dtype=bool)
+        original_indices = np.flatnonzero(eligible)
+        return starts[eligible], original_indices
+
+    def _select_separated(
+        self,
+        starts: np.ndarray,
+        original_indices: np.ndarray,
+        scores: np.ndarray,
+        top_k: int,
+        min_separation_candles: int,
+    ) -> list[tuple[int, float]]:
+        if len(starts) == 0 or top_k <= 0:
+            return []
+
+        ranked = np.argsort(-scores, kind="stable")
+        minimum_separation = None
+        if len(starts) >= 2:
+            spacing = starts[1] - starts[0]
+            minimum_separation = spacing * min_separation_candles
+
+        selected: list[tuple[int, float]] = []
+        selected_positions: list[int] = []
+        for rank_index in ranked:
+            position = int(rank_index)
+            candidate_start = starts[position]
+            if minimum_separation is not None and any(
+                abs(candidate_start - starts[selected_position]) < minimum_separation
+                for selected_position in selected_positions
+            ):
+                continue
+            selected.append((int(original_indices[position]), float(scores[position])))
+            selected_positions.append(position)
+            if len(selected) >= top_k:
+                break
+        return selected
+
     def rank_v1(
         self,
         current_start_time: datetime,
         top_k: int,
         min_separation_candles: int,
     ) -> list[tuple[int, float]]:
-        """Return exact V1-ranked historical candle start indices and scores.
-
-        Distance calculation is chunked so long histories do not allocate one
-        giant normalized window matrix. Scores and ordering remain equivalent
-        to the previous vectorized implementation.
-        """
+        """Return exact V1-ranked historical candle start indices and scores."""
         if top_k <= 0:
             return []
 
@@ -97,8 +133,6 @@ class NumericalWindowStore:
         current_path = current_window / current_window[0] - 1.0
         scores = np.empty(len(starts), dtype=np.float64)
 
-        # Keep the temporary normalized matrix bounded even when a market has
-        # years of 1m/5m candles. The final score array is only one float/window.
         chunk_size = 25_000
         eligible_positions = np.flatnonzero(eligible)
         for chunk_start in range(0, len(eligible_positions), chunk_size):
@@ -108,34 +142,47 @@ class NumericalWindowStore:
             distances = np.sqrt(np.mean((normalized - current_path) ** 2, axis=1))
             scores[chunk_start : chunk_start + len(positions)] = np.exp(-distances * 10.0).clip(0.0, 1.0)
 
-        # Stable descending sort preserves the exact tie behavior of the old
-        # full-matrix implementation while keeping peak memory bounded.
-        ranked = np.argsort(-scores, kind="stable")
+        return self._select_separated(
+            starts, original_indices, scores, top_k, min_separation_candles
+        )
 
-        minimum_separation = None
-        if len(starts) >= 2:
-            spacing = starts[1] - starts[0]
-            minimum_separation = spacing * min_separation_candles
+    def rank_v4(
+        self,
+        current_start_time: datetime,
+        top_k: int,
+        min_separation_candles: int,
+    ) -> list[tuple[int, float]]:
+        """Rank with strict V4 shape gates using bounded-memory vectorization."""
+        if top_k <= 0:
+            return []
 
-        selected: list[tuple[int, float]] = []
-        selected_positions: list[int] = []
+        starts, original_indices = self._eligible_windows(current_start_time)
+        if len(starts) == 0:
+            return []
 
-        for rank_index in ranked:
-            position = int(rank_index)
-            candidate_start = starts[position]
+        windows = np.lib.stride_tricks.sliding_window_view(self.close, self.window_length)
+        current_window = self.close[-self.window_length:]
+        current_path = current_window / current_window[0] - 1.0
+        scores = np.empty(len(starts), dtype=np.float64)
 
-            if minimum_separation is not None and any(
-                abs(candidate_start - starts[selected_position]) < minimum_separation
-                for selected_position in selected_positions
-            ):
-                continue
+        chunk_size = 25_000
+        eligible_positions = np.flatnonzero(
+            np.asarray(self.window_end_times() < current_start_time, dtype=bool)
+        )
+        for chunk_start in range(0, len(eligible_positions), chunk_size):
+            positions = eligible_positions[chunk_start : chunk_start + chunk_size]
+            normalized = windows[positions] / windows[positions, :, None][:, :, 0:1] if False else None
+            # The expression above is intentionally avoided; normalize directly
+            # from the first close of each candidate window.
+            chunk = windows[positions]
+            normalized = chunk / chunk[:, :1] - 1.0
+            scores[chunk_start : chunk_start + len(positions)] = SimilarityV4.score_paths(
+                current_path, normalized
+            )
 
-            selected.append((int(original_indices[position]), float(scores[position])))
-            selected_positions.append(position)
-            if len(selected) >= top_k:
-                break
-
-        return selected
+        return self._select_separated(
+            starts, original_indices, scores, top_k, min_separation_candles
+        )
 
 
 def build_numerical_store(
