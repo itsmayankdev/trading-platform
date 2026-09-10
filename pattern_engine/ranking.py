@@ -86,18 +86,31 @@ class PatternRanker:
         top_k: int = 10,
         min_separation_candles: int | None = None,
     ) -> list[RankedMatch]:
-        """Rank directly from the compact numerical V1 representation."""
-        if self.algorithm.version != "similarity_v1":
-            raise ValueError("Numerical retrieval currently supports similarity_v1 only")
+        """Compatibility entry point for the production numerical matcher.
+
+        V1 remains frozen. The selected registry algorithm controls which
+        bounded-memory numerical scorer is used here.
+        """
         if top_k <= 0:
             return []
 
         separation = min_separation_candles or current.length
-        ranked = store.rank_v1(
-            current_start_time=current.start_time,
-            top_k=top_k,
-            min_separation_candles=separation,
-        )
+        if self.algorithm.version == "similarity_v1":
+            ranked = store.rank_v1(
+                current_start_time=current.start_time,
+                top_k=top_k,
+                min_separation_candles=separation,
+            )
+        elif self.algorithm.version == "similarity_v4":
+            ranked = store.rank_v4(
+                current_start_time=current.start_time,
+                top_k=top_k,
+                min_separation_candles=separation,
+            )
+        else:
+            raise ValueError(
+                f"Numerical retrieval does not support {self.algorithm.version}"
+            )
 
         return [
             RankedMatch(
