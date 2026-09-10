@@ -127,11 +127,21 @@ class NumericalWindowStore:
             scores[chunk_start : chunk_start + len(positions)] = SimilarityV4.score_paths(current_path, normalized)
         return self._select_separated(starts, original_indices, scores, top_k, min_separation_candles)
 
-    def rank_v5(self, current_start_time: datetime, top_k: int, min_separation_candles: int):
-        """Exact bounded-memory port of the supplied 100k reference matcher."""
+    def rank_v5(self, current_start_time: datetime, top_k: int, min_separation_candles: int = 50):
+        """Exact candidate semantics of the supplied fast 100k reference engine."""
         if top_k <= 0:
             return []
-        starts, original_indices, eligible = self._eligible_windows(current_start_time)
+        starts = self.window_start_times()
+        ends = self.window_end_times()
+        if len(starts) == 0:
+            return []
+
+        # Reference engine requires the candidate to have a complete 60-bar
+        # follow path and to finish before the live pattern begins.
+        candidate_end_indices = np.arange(self.window_length - 1, len(self.close) - 1)
+        eligible = (ends < current_start_time) & ((candidate_end_indices + SimilarityV5.FOLLOW_BARS) < len(self.close))
+        original_indices = np.flatnonzero(eligible)
+        starts = starts[eligible]
         if len(starts) == 0:
             return []
 
@@ -141,9 +151,9 @@ class NumericalWindowStore:
         scores = np.empty(len(starts), dtype=np.float64)
         eligible_positions = np.flatnonzero(eligible)
 
-        # The supplied engine uses a rolling min/max deque. This vectorized
-        # implementation computes the identical per-window min/max definition
-        # in bounded chunks while preserving the same RMSE and score formula.
+        # The supplied engine computes rolling min/max with monotonic deques.
+        # Computing the same window extrema in bounded chunks preserves its
+        # normalization and RMSE definition without changing the score.
         for chunk_start in range(0, len(eligible_positions), 25_000):
             positions = eligible_positions[chunk_start : chunk_start + 25_000]
             chunk = windows[positions]
