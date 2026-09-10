@@ -19,27 +19,36 @@ def register(response:Response,body:dict=Body(...),db:Session=Depends(get_db)):
     if not email or "@" not in email:raise HTTPException(status_code=400,detail="Valid email is required")
     if len(password)<8:raise HTTPException(status_code=400,detail="Password must be at least 8 characters")
     if db.scalar(select(AdminUser).where(AdminUser.email==email)):raise HTTPException(status_code=409,detail="An account with this email already exists. Please use a different email.")
-    user=AdminUser(email=email,display_name=name,first_name=first,last_name=last,password_hash=hash_password(password),status="active");plan=db.scalar(select(AdminPlan).where(AdminPlan.code=="free",AdminPlan.active.is_(True)));role=db.scalar(select(AdminRole).where(AdminRole.code=="viewer"))
-    if plan:user.plan=plan
-    if role:user.roles=[role]
-    db.add(user)
     try:
-        db.flush();user.last_seen_at=datetime.now(timezone.utc);db.commit()
+        user=AdminUser(email=email,display_name=name,first_name=first,last_name=last,password_hash=hash_password(password),status="active");plan=db.scalar(select(AdminPlan).where(AdminPlan.code=="free",AdminPlan.active.is_(True)));role=db.scalar(select(AdminRole).where(AdminRole.code=="viewer"))
+        if plan:user.plan=plan
+        if role:user.roles=[role]
+        db.add(user);db.flush();user.last_seen_at=datetime.now(timezone.utc);db.commit()
     except IntegrityError:
         db.rollback();raise HTTPException(status_code=409,detail="An account with this email already exists. Please use a different email.")
-    user=_load_user(db,user.id);set_user_cookie(response,user);return _serialize(user)
+    except Exception:
+        db.rollback();raise
+    user=_load_user(db,user.id)
+    if user is None: raise HTTPException(status_code=500,detail="Account was created but could not be loaded. Please try signing in.")
+    set_user_cookie(response,user);return _serialize(user)
 @router.post("/login")
 def login(response:Response,body:dict=Body(...),db:Session=Depends(get_db)):
     email=str(body.get("email","")).strip().lower();password=str(body.get("password",""));user=db.scalar(select(AdminUser).where(AdminUser.email==email))
     if not user or not user.password_hash or not verify_password(password,user.password_hash):raise HTTPException(status_code=401,detail="Invalid email or password")
     if user.status!="active":raise HTTPException(status_code=403,detail=f"Account is {user.status}")
-    user.last_seen_at=datetime.now(timezone.utc);db.commit();user=_load_user(db,user.id);set_user_cookie(response,user);return _serialize(user)
+    user.last_seen_at=datetime.now(timezone.utc);db.commit();user=_load_user(db,user.id)
+    if user is None: raise HTTPException(status_code=500,detail="Account could not be loaded. Please try again.")
+    set_user_cookie(response,user);return _serialize(user)
 @router.post("/logout")
 def logout(response:Response):clear_user_cookie(response);return {"authenticated":False}
 @router.get("/session")
-def session(request:Request,db:Session=Depends(get_db)):
+def session(request:Request,response:Response,db:Session=Depends(get_db)):
     user=get_current_user(request,db)
-    if not user:return {"authenticated":False}
+    if not user:
+        # Remove an expired, malformed, revoked, or otherwise invalid session cookie
+        # so the browser cannot keep carrying stale authentication state.
+        clear_user_cookie(response)
+        return {"authenticated":False}
     user.last_seen_at=datetime.now(timezone.utc);db.commit();return {"authenticated":True,**_serialize(user)}
 @router.get("/me")
 def me(request:Request,db:Session=Depends(get_db)):return _serialize(require_user(request,db))
