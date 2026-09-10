@@ -18,12 +18,18 @@ def effective_plan(db:Session,user:AdminUser)->AdminPlan:
         if user.trial_ends_at>now and user.trial_plan:return user.trial_plan
         free=db.scalar(select(AdminPlan).where(AdminPlan.code=="free",AdminPlan.active.is_(True)))
         if free:
-            user.plan_id=free.id;user.trial_plan_id=None;user.trial_started_at=None;user.trial_ends_at=None;user.plan_status="active";user.subscription_started_at=None;user.subscription_ends_at=None;user.updated_at=now
-            _set_role_for_plan(db,user,"free");db.commit();user.plan=free;return free
+            user.plan_id=free.id;user.trial_plan_id=None;user.trial_started_at=None;user.trial_ends_at=None;user.plan_status="active";user.subscription_started_at=None;user.subscription_ends_at=None;user.updated_at=now;_set_role_for_plan(db,user,"free");db.commit();user.plan=free;return free
     if user.plan:return user.plan
     free=db.scalar(select(AdminPlan).where(AdminPlan.code=="free",AdminPlan.active.is_(True)))
     if not free:raise RuntimeError("Free plan is not configured")
     user.plan_id=free.id;user.plan_status="active";user.updated_at=now;_set_role_for_plan(db,user,"free");db.commit();user.plan=free;return free
+
+def effective_limits(user:AdminUser,plan:AdminPlan)->dict:
+    limits=dict(plan.limits_json or {})
+    if user.plan_status=="trialing":
+        if "trial_searches_per_day" in limits:limits["searches_per_day"]=int(limits["trial_searches_per_day"])
+        if "trial_max_matches" in limits:limits["max_matches"]=int(limits["trial_max_matches"])
+    return limits
 
 def activate_registration_plan(db:Session,user:AdminUser,requested_code:str)->AdminPlan:
     code=(requested_code or "free").strip().lower()
@@ -39,7 +45,7 @@ def search_usage(db:Session,user_id:int)->int:
     return int(db.scalar(select(func.count(AdminUsageEvent.id)).where(AdminUsageEvent.user_id==user_id,AdminUsageEvent.event_type=="pattern_search",AdminUsageEvent.created_at>=start)) or 0)
 
 def check_search_limit(db:Session,user:AdminUser,timeframe:str,top_k:int)->tuple[AdminPlan,int,int]:
-    plan=effective_plan(db,user);limits=plan.limits_json or {};used=search_usage(db,user.id);daily=int(limits.get("searches_per_day",0))
+    plan=effective_plan(db,user);limits=effective_limits(user,plan);used=search_usage(db,user.id);daily=int(limits.get("searches_per_day",0))
     if daily>0 and used>=daily:raise PermissionError(f"Daily search limit reached for the {plan.name} plan ({daily} searches).")
     allowed=[str(x).lower() for x in limits.get("timeframes",[])]
     if allowed and timeframe.lower() not in allowed:raise PermissionError(f"{timeframe} timeframe is not available on the {plan.name} plan.")
