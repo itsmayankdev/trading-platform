@@ -18,6 +18,7 @@ from pattern_engine.ranking import PatternRanker
 from pattern_engine.outcomes import calculate_outcomes
 from pattern_engine.statistics import calculate_statistics
 from pattern_engine.diagnostics import build_match_diagnostics
+from pattern_engine.shape_validation import calibrated_similarity, directional_agreement, passes_shape_validation
 
 _CACHE_MAX_ENTRIES = 16
 _CACHE_TTL_SECONDS = 30.0
@@ -32,11 +33,6 @@ def _cached_numerical_rows(instrument_id: int, timeframe: str) -> tuple[tuple, b
     key = (instrument_id, timeframe)
     now = time.monotonic()
 
-    # Fast path: searches for different pattern lengths should reuse the same
-    # in-memory candle snapshot instead of hitting PostgreSQL on every request.
-    # The snapshot is intentionally short-lived so normal live-data updates are
-    # picked up automatically without making the search endpoint latency-bound
-    # by a latest-row query on every request.
     with _CACHE_LOCK:
         cached = _NUMERICAL_CACHE.get(key)
         if cached is not None:
@@ -56,8 +52,6 @@ def _cached_numerical_rows(instrument_id: int, timeframe: str) -> tuple[tuple, b
         latest_timestamp, latest_close = latest
 
         with _CACHE_LOCK:
-            # Another request may have populated the snapshot while this request
-            # was waiting for a DB connection. Reuse it if it is still fresh.
             cached = _NUMERICAL_CACHE.get(key)
             if cached is not None:
                 cached_at, cached_timestamp, cached_close, cached_rows = cached
@@ -123,9 +117,6 @@ class PatternSearchService:
                 timings[name] = time.perf_counter() - started
 
         started = time.perf_counter()
-        # Pattern search is latency-sensitive. It only requires enough candles to
-        # execute the search; full-history expansion is owned by the ingestion
-        # scheduler/background workers rather than this request.
         ensure_market_data(symbol, timeframe, pattern_length + 1, background_history=False)
         mark("warmup_check", started)
 
@@ -155,12 +146,36 @@ class PatternSearchService:
 
         started = time.perf_counter()
         ranker = PatternRanker()
-        matches = ranker.rank_numerical_v1(
+        candidate_count = min(max(top_k * 3, top_k), 50)
+        candidates = ranker.rank_numerical_v1(
             current=current,
             store=store,
-            top_k=top_k,
+            top_k=candidate_count,
             min_separation_candles=pattern_length,
         )
+
+        current_closes = [row.close for row in rows[-pattern_length:]]
+        validated = []
+        for match in candidates:
+            start_index = timestamp_to_index.get(match.start_time)
+            if start_index is None:
+                continue
+            historical_closes = [row.close for row in rows[start_index:start_index + pattern_length]]
+            agreement = directional_agreement(current_closes, historical_closes)
+            if not passes_shape_validation(agreement):
+                continue
+            calibrated = calibrated_similarity(match.similarity_score, agreement)
+            validated.append((match, agreement, calibrated))
+
+        validated.sort(key=lambda item: item[2], reverse=True)
+        matches = []
+        separation = pattern_length
+        for match, agreement, calibrated in validated:
+            if any(abs(match.start_time - selected.start_time) < (timestamps[1] - timestamps[0]) * separation for selected in matches) if len(timestamps) >= 2 else False:
+                continue
+            matches.append(type(match)(start_time=match.start_time, end_time=match.end_time, similarity_score=calibrated))
+            if len(matches) >= top_k:
+                break
         mark("ranking", started)
 
         started = time.perf_counter()
