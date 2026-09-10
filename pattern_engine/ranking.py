@@ -107,3 +107,32 @@ class PatternRanker:
             )
             for start_index, score in ranked
         ]
+
+    def rank_numerical_v4(
+        self,
+        current: PatternWindow,
+        store: NumericalWindowStore,
+        top_k: int = 10,
+        min_separation_candles: int | None = None,
+    ) -> list[RankedMatch]:
+        """Rank with strict V4 structural gates over the numerical store."""
+        if self.algorithm.version != "similarity_v4":
+            raise ValueError("Numerical retrieval currently supports similarity_v4 only")
+        if top_k <= 0:
+            return []
+
+        separation = min_separation_candles or current.length
+        ranked = store.rank_v4(
+            current_start_time=current.start_time,
+            top_k=top_k,
+            min_separation_candles=separation,
+        )
+
+        return [
+            RankedMatch(
+                start_time=store.timestamps[start_index],
+                end_time=store.timestamps[start_index + store.window_length - 1],
+                similarity_score=score,
+            )
+            for start_index, score in ranked
+        ]
