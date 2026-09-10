@@ -4,7 +4,7 @@ from backend.app.auth.user_auth import require_permission, require_user
 from backend.app.db.session import get_db
 from backend.app.repositories.instrument import InstrumentRepository
 from backend.app.search.service import PatternSearchService
-from backend.app.services.plan_service import check_search_limit, record_search
+from backend.app.plan_service import check_search_limit, record_search
 router=APIRouter(prefix="/api/v1",tags=["pattern-search"])
 instrument_repository=InstrumentRepository();service=PatternSearchService()
 @router.get("/pattern-search")
