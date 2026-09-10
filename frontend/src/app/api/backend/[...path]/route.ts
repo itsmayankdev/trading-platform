@@ -27,6 +27,14 @@ async function proxy(request: NextRequest, context: { params: Promise<{ path: st
     responseHeaders.delete("content-encoding");
     responseHeaders.delete("content-length");
 
+    // Preserve every Set-Cookie header exactly. Authentication relies on the
+    // backend session cookie reaching the browser through this proxy.
+    const getSetCookie = (response.headers as Headers & { getSetCookie?: () => string[] }).getSetCookie;
+    if (getSetCookie) {
+      responseHeaders.delete("set-cookie");
+      for (const cookie of getSetCookie.call(response.headers)) responseHeaders.append("set-cookie", cookie);
+    }
+
     return new NextResponse(response.body, {
       status: response.status,
       statusText: response.statusText,
