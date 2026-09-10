@@ -3,7 +3,6 @@
 import { FormEvent, useState } from "react";
 import { ShieldCheck } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { announceAuthChanged } from "@/components/auth/AuthProvider";
 
 const api=(path:string,init?:RequestInit)=>fetch(`/api/backend/api/v1/auth${path}`,{...init,credentials:"include",headers:{"Content-Type":"application/json",...(init?.headers||{})},cache:"no-store"});
 
@@ -19,7 +18,6 @@ export default function LoginPage(){
       const session=await api("/session",{method:"GET"});
       const sessionBody=await session.json().catch(()=>({}));
       if(!session.ok||!sessionBody?.authenticated){setError("Authentication succeeded, but the session could not be established. Please try again.");return;}
-      announceAuthChanged();
       const next=params.get("next"); router.replace(next&&next.startsWith("/")&&!next.startsWith("//")?next:"/dashboard"); router.refresh();
     } catch { setError("Unable to reach the authentication service. Please check your connection and try again."); }
     finally { setBusy(false); }
