@@ -11,6 +11,7 @@ import SearchControls from "@/components/pattern-search/SearchControls";
 import PinPatternDialog from "@/components/pattern-search/PinPatternDialog";
 import type { SearchResponse } from "@/components/pattern-search/types";
 import { getMarketCandles, prefetchMarketCandles } from "@/lib/marketCache";
+import { SearchResponseCache } from "@/lib/searchCache";
 import { readFavoritePatterns, type FavoritePattern } from "@/lib/favorites";
 import { readGlobalMarket, writeGlobalMarket } from "@/lib/marketContext";
 
@@ -20,7 +21,7 @@ const WATCHLIST_KEY = "market-memory-watchlist";
 const DEFAULT_SYMBOL = "ETHUSDT";
 const DASHBOARD_CHART_CANDLES = 240;
 const SEARCH_DEBOUNCE_MS = 180;
-const SEARCH_RESPONSE_CACHE_MAX = 12;
+const searchResponseCache = new SearchResponseCache<SearchResponse>({ ttlMs: 20_000, maxEntries: 12 });
 
 export default function Dashboard() {
   const [symbol, setSymbol] = useState(() => readGlobalMarket(DEFAULT_SYMBOL).symbol);
@@ -41,7 +42,6 @@ export default function Dashboard() {
   const searchAbortRef = useRef<AbortController | null>(null);
   const searchRequestRef = useRef(0);
   const favoriteMatchIndexRef = useRef<number | null>(null);
-  const searchResponseCacheRef = useRef<Map<string, SearchResponse>>(new Map());
 
   useEffect(() => { try { const saved = JSON.parse(window.localStorage.getItem(WATCHLIST_KEY) || "[]"); if (Array.isArray(saved)) setWatchlist(saved.filter((item): item is string => typeof item === "string")); } catch {} }, []);
   function warmChart(value: string, nextTimeframe = timeframe) { void prefetchMarketCandles(value, nextTimeframe, DASHBOARD_CHART_CANDLES).catch(() => {}); }
@@ -63,10 +63,8 @@ export default function Dashboard() {
     searchAbortRef.current = controller;
     const requestId = ++searchRequestRef.current;
     const cacheKey = `${symbol}::${timeframe}::${requestedPatternLength}::${requestedTopK}`;
-    const cachedResponse = searchResponseCacheRef.current.get(cacheKey);
+    const cachedResponse = searchResponseCache.get(cacheKey);
     if (cachedResponse) {
-      searchResponseCacheRef.current.delete(cacheKey);
-      searchResponseCacheRef.current.set(cacheKey, cachedResponse);
       setData(cachedResponse);
       setLoading(false);
       setError("");
@@ -86,9 +84,7 @@ export default function Dashboard() {
       }
       const next = await response.json() as SearchResponse;
       if (requestId === searchRequestRef.current && !controller.signal.aborted) {
-        searchResponseCacheRef.current.delete(cacheKey);
-        searchResponseCacheRef.current.set(cacheKey, next);
-        while (searchResponseCacheRef.current.size > SEARCH_RESPONSE_CACHE_MAX) searchResponseCacheRef.current.delete(searchResponseCacheRef.current.keys().next().value as string);
+        searchResponseCache.set(cacheKey, next);
         setData(next);
         if (favoriteMatchIndexRef.current != null) { setSelectedMatchIndex(Math.min(favoriteMatchIndexRef.current, Math.max(0, next.matches.length - 1))); favoriteMatchIndexRef.current = null; }
       }
@@ -105,8 +101,6 @@ export default function Dashboard() {
       if (active) void searchPatterns();
     }, SEARCH_DEBOUNCE_MS);
     return () => { active = false; window.clearTimeout(timer); searchAbortRef.current?.abort(); };
-    // Search is intentionally driven by the four dashboard controls only.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [symbol, timeframe, patternLength, topK]);
   useEffect(() => { const initialTimer = window.setTimeout(() => void refreshLiveQuote(), 0); const interval = window.setInterval(() => void refreshLiveQuote(), 10000); return () => { window.clearTimeout(initialTimer); window.clearInterval(interval); }; }, [symbol]);
   function pinCurrent() { if (!data) return; setPinTarget({ type: "current", symbol: data.symbol, timeframe: data.timeframe, patternLength: data.pattern_length, startTime: data.current_pattern.start_time, endTime: data.current_pattern.end_time }); }
