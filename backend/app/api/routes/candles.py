@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
@@ -13,6 +13,13 @@ from workers.ingestion.yahoo_on_demand import ensure_yahoo_market_data
 router = APIRouter(prefix="/api/v1", tags=["candles"])
 candle_repository = CandleRepository()
 instrument_repository = InstrumentRepository()
+
+
+def _normalize_db_datetime(value: datetime | None) -> datetime | None:
+    """Normalize API datetimes to the UTC-naive form used by candle storage."""
+    if value is None or value.tzinfo is None:
+        return value
+    return value.astimezone(timezone.utc).replace(tzinfo=None)
 
 
 @router.get("/candles")
@@ -30,6 +37,14 @@ def get_candles(
     symbol, timeframe = symbol.upper(), timeframe.lower()
     if start_time is not None and end_time is not None and start_time > end_time:
         raise HTTPException(status_code=400, detail="start_time must be before end_time")
+
+    # Candle timestamps are stored as UTC-naive PostgreSQL timestamps. FastAPI
+    # may parse browser ISO timestamps as timezone-aware values (especially when
+    # a trailing Z is present), so normalize the bounded historical window
+    # before SQLAlchemy compares it with the candle column.
+    start_time = _normalize_db_datetime(start_time)
+    end_time = _normalize_db_datetime(end_time)
+
     instrument = instrument_repository.get_by_symbol(db=db, symbol=symbol)
     if instrument is None:
         raise HTTPException(status_code=404, detail=f"Instrument not found: {symbol}")
@@ -159,7 +174,7 @@ def get_candles(
             "provider": instrument.provider,
             "candles": [
                 {
-                    "time": int(c.timestamp.timestamp()),
+                    "time": int(c.timestamp.replace(tzinfo=timezone.utc).timestamp()),
                     "open": c.open,
                     "high": c.high,
                     "low": c.low,
