@@ -146,6 +146,30 @@ def get_candles(
             end_time=end_time,
         )
 
+    # Bounded historical requests only need the requested candles. Avoid the
+    # separate full-table time-range aggregate here; it is unnecessary for the
+    # historical chart and can turn an otherwise valid bounded read into a 500.
+    if start_time is not None and end_time is not None:
+        return {
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "count": len(candles),
+            "available_start_time": None,
+            "available_end_time": None,
+            "provider": instrument.provider,
+            "candles": [
+                {
+                    "time": int(c.timestamp.timestamp()),
+                    "open": c.open,
+                    "high": c.high,
+                    "low": c.low,
+                    "close": c.close,
+                    "volume": c.volume,
+                }
+                for c in candles
+            ],
+        }
+
     available_start, available_end = candle_repository.get_time_range(
         db=db,
         instrument_id=instrument.id,
