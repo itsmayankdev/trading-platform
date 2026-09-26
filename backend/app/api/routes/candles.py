@@ -51,14 +51,59 @@ def get_candles(
             start_time=start_time,
             end_time=end_time,
         )
-        required = min(limit, 1000)
-        if len(candles) < required:
+        # Bounded historical chart requests normally need only the requested
+        # window. Do not compare that window against a 1000-candle threshold:
+        # doing so can unnecessarily start foreground ingestion and can fail a
+        # historical chart even when the search engine already has the match.
+        if not candles and start_time is not None and end_time is not None:
+            db.expire_all()
+            try:
+                if instrument.provider == "yahoo":
+                    ensure_yahoo_market_data(
+                        symbol=symbol,
+                        timeframe=timeframe,
+                        minimum_candles=min(limit, 1000),
+                    )
+                elif (
+                    instrument.exchange == "binance"
+                    and instrument.provider == "binance"
+                    and instrument.is_listed
+                    and instrument.is_spot_trading_allowed
+                ):
+                    ensure_market_data(
+                        symbol=symbol,
+                        timeframe=timeframe,
+                        minimum_candles=min(limit, 1000),
+                        background_history=False,
+                    )
+                else:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Unsupported market provider: {instrument.provider}",
+                    )
+            except HTTPException:
+                raise
+            except Exception as warmup_error:
+                print(
+                    f"Historical candle warmup skipped for {symbol} {timeframe}: {warmup_error}",
+                    flush=True,
+                )
+            db.expire_all()
+            candles = candle_repository.get_candles(
+                db=db,
+                instrument_id=instrument.id,
+                timeframe=timeframe,
+                limit=limit,
+                start_time=start_time,
+                end_time=end_time,
+            )
+        elif start_time is None and end_time is None and len(candles) < min(limit, 1000):
             db.expire_all()
             if instrument.provider == "yahoo":
                 ensure_yahoo_market_data(
                     symbol=symbol,
                     timeframe=timeframe,
-                    minimum_candles=required,
+                    minimum_candles=min(limit, 1000),
                 )
             elif (
                 instrument.exchange == "binance"
@@ -66,12 +111,10 @@ def get_candles(
                 and instrument.is_listed
                 and instrument.is_spot_trading_allowed
             ):
-                # Seed only the minimum foreground dataset. Do not submit the
-                # 365-day background downloader from a latency-sensitive chart.
                 ensure_market_data(
                     symbol=symbol,
                     timeframe=timeframe,
-                    minimum_candles=required,
+                    minimum_candles=min(limit, 1000),
                     background_history=False,
                 )
             else:
