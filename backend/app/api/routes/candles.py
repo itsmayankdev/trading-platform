@@ -7,6 +7,8 @@ from backend.app.auth.user_auth import require_permission, require_user
 from backend.app.db.session import get_db
 from backend.app.repositories.candle import CandleRepository
 from backend.app.repositories.instrument import InstrumentRepository
+from market_data.interface import Candle as MarketCandle
+from market_data.providers.binance import BinanceProvider
 from workers.ingestion.on_demand import ensure_market_data, refresh_latest_market_candle
 from workers.ingestion.yahoo_on_demand import ensure_yahoo_market_data
 
@@ -20,6 +22,59 @@ def _normalize_db_datetime(value: datetime | None) -> datetime | None:
     if value is None or value.tzinfo is None:
         return value
     return value.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def _load_exact_binance_window(
+    db: Session,
+    instrument_id: int,
+    symbol: str,
+    timeframe: str,
+    start_time: datetime,
+    end_time: datetime,
+) -> list:
+    """Fetch only the missing historical window and persist it before reading again."""
+    provider_start = start_time.replace(tzinfo=timezone.utc)
+    provider_end = end_time.replace(tzinfo=timezone.utc)
+    if provider_start >= provider_end:
+        return []
+
+    candles = BinanceProvider().get_candles(
+        symbol=symbol,
+        timeframe=timeframe,
+        start=provider_start,
+        end=provider_end,
+    )
+    if not candles:
+        return []
+
+    normalized = [
+        MarketCandle(
+            timestamp=candle.timestamp.astimezone(timezone.utc).replace(tzinfo=None),
+            open=candle.open,
+            high=candle.high,
+            low=candle.low,
+            close=candle.close,
+            volume=candle.volume,
+        )
+        for candle in candles
+    ]
+
+    candle_repository.insert_many(
+        db=db,
+        instrument_id=instrument_id,
+        timeframe=timeframe,
+        candles=normalized,
+    )
+    db.commit()
+    db.expire_all()
+    return candle_repository.get_candles(
+        db=db,
+        instrument_id=instrument_id,
+        timeframe=timeframe,
+        limit=5000,
+        start_time=start_time,
+        end_time=end_time,
+    )
 
 
 @router.get("/candles")
@@ -72,47 +127,44 @@ def get_candles(
         # doing so can unnecessarily start foreground ingestion and can fail a
         # historical chart even when the search engine already has the match.
         if not candles and start_time is not None and end_time is not None:
-            db.expire_all()
-            try:
-                if instrument.provider == "yahoo":
+            # A historical match may be outside the currently cached window.
+            # Load exactly that window instead of seeding unrelated recent data.
+            if instrument.provider == "binance":
+                try:
+                    candles = _load_exact_binance_window(
+                        db=db,
+                        instrument_id=instrument.id,
+                        symbol=symbol,
+                        timeframe=timeframe,
+                        start_time=start_time,
+                        end_time=end_time,
+                    )
+                except Exception as history_error:
+                    print(
+                        f"Historical candle fetch failed for {symbol} {timeframe}: {history_error}",
+                        flush=True,
+                    )
+            elif instrument.provider == "yahoo":
+                try:
                     ensure_yahoo_market_data(
                         symbol=symbol,
                         timeframe=timeframe,
                         minimum_candles=min(limit, 1000),
                     )
-                elif (
-                    instrument.exchange == "binance"
-                    and instrument.provider == "binance"
-                    and instrument.is_listed
-                    and instrument.is_spot_trading_allowed
-                ):
-                    ensure_market_data(
-                        symbol=symbol,
+                    db.expire_all()
+                    candles = candle_repository.get_candles(
+                        db=db,
+                        instrument_id=instrument.id,
                         timeframe=timeframe,
-                        minimum_candles=min(limit, 1000),
-                        background_history=False,
+                        limit=limit,
+                        start_time=start_time,
+                        end_time=end_time,
                     )
-                else:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Unsupported market provider: {instrument.provider}",
+                except Exception as history_error:
+                    print(
+                        f"Historical Yahoo fetch failed for {symbol} {timeframe}: {history_error}",
+                        flush=True,
                     )
-            except HTTPException:
-                raise
-            except Exception as warmup_error:
-                print(
-                    f"Historical candle warmup skipped for {symbol} {timeframe}: {warmup_error}",
-                    flush=True,
-                )
-            db.expire_all()
-            candles = candle_repository.get_candles(
-                db=db,
-                instrument_id=instrument.id,
-                timeframe=timeframe,
-                limit=limit,
-                start_time=start_time,
-                end_time=end_time,
-            )
         elif start_time is None and end_time is None and len(candles) < min(limit, 1000):
             db.expire_all()
             if instrument.provider == "yahoo":
