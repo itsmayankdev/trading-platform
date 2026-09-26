@@ -140,6 +140,7 @@ def get_candles(
                         end_time=end_time,
                     )
                 except Exception as history_error:
+                    db.rollback()
                     print(
                         f"Historical candle fetch failed for {symbol} {timeframe}: {history_error}",
                         flush=True,
@@ -161,6 +162,7 @@ def get_candles(
                         end_time=end_time,
                     )
                 except Exception as history_error:
+                    db.rollback()
                     print(
                         f"Historical Yahoo fetch failed for {symbol} {timeframe}: {history_error}",
                         flush=True,
