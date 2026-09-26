@@ -59,22 +59,35 @@ def _load_exact_binance_window(
         for candle in candles
     ]
 
-    candle_repository.insert_many(
-        db=db,
-        instrument_id=instrument_id,
-        timeframe=timeframe,
-        candles=normalized,
-    )
-    db.commit()
-    db.expire_all()
-    return candle_repository.get_candles(
-        db=db,
-        instrument_id=instrument_id,
-        timeframe=timeframe,
-        limit=5000,
-        start_time=start_time,
-        end_time=end_time,
-    )
+    # Persistence is best-effort for a chart read. The historical chart must
+    # still render if the database write/constraint is temporarily unhealthy.
+    try:
+        candle_repository.insert_many(
+            db=db,
+            instrument_id=instrument_id,
+            timeframe=timeframe,
+            candles=normalized,
+        )
+        db.commit()
+        db.expire_all()
+        stored = candle_repository.get_candles(
+            db=db,
+            instrument_id=instrument_id,
+            timeframe=timeframe,
+            limit=5000,
+            start_time=start_time,
+            end_time=end_time,
+        )
+        if stored:
+            return stored
+    except Exception as persistence_error:
+        db.rollback()
+        print(
+            f"Historical candle persistence skipped for {symbol} {timeframe}: {persistence_error}",
+            flush=True,
+        )
+
+    return normalized
 
 
 @router.get("/candles")
