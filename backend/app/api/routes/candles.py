@@ -35,15 +35,16 @@ def get_candles(
     user = require_user(request, db)
     require_permission(user, "market_memory.view")
     symbol, timeframe = symbol.upper(), timeframe.lower()
-    if start_time is not None and end_time is not None and start_time > end_time:
-        raise HTTPException(status_code=400, detail="start_time must be before end_time")
 
     # Candle timestamps are stored as UTC-naive PostgreSQL timestamps. FastAPI
     # may parse browser ISO timestamps as timezone-aware values (especially when
     # a trailing Z is present), so normalize the bounded historical window
-    # before SQLAlchemy compares it with the candle column.
+    # before validation or SQLAlchemy compares it with the candle column.
     start_time = _normalize_db_datetime(start_time)
     end_time = _normalize_db_datetime(end_time)
+
+    if start_time is not None and end_time is not None and start_time > end_time:
+        raise HTTPException(status_code=400, detail="start_time must be before end_time")
 
     instrument = instrument_repository.get_by_symbol(db=db, symbol=symbol)
     if instrument is None:
