@@ -20,6 +20,17 @@ from pattern_engine.outcomes import calculate_outcomes
 from pattern_engine.statistics import calculate_statistics
 from pattern_engine.diagnostics import build_match_diagnostics
 
+
+def _utc(value):
+    """Return a datetime as a UTC ISO-8601 string for API responses."""
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    else:
+        value = value.astimezone(timezone.utc)
+    return value.isoformat().replace("+00:00", "Z")
+
 _CACHE_MAX_ENTRIES = 16
 _CACHE_TTL_SECONDS = 60.0
 _RESULT_CACHE_MAX_ENTRIES = 24
