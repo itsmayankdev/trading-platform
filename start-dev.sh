@@ -8,16 +8,28 @@ log() { printf '\n[trading-dev] %s\n' "$*"; }
 fail() { printf '\n[trading-dev] ERROR: %s\n' "$*" >&2; exit 1; }
 
 command -v python3 >/dev/null 2>&1 || fail "python3 is required."
-command -v node >/dev/null 2>&1 || fail "Node.js is required. Next.js 16 requires Node.js 20.9+."
-command -v npm >/dev/null 2>&1 || fail "npm is required."
+
+# WSL/non-login shells often do not source ~/.bashrc. If nvm is already
+# installed, load it explicitly so the startup command works from WSL too.
+if ! command -v node >/dev/null 2>&1; then
+  export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+  if [ -s "$NVM_DIR/nvm.sh" ]; then
+    # shellcheck disable=SC1090
+    . "$NVM_DIR/nvm.sh"
+  fi
+fi
+
+command -v node >/dev/null 2>&1 || fail "Node.js is not installed or is not on PATH. Install Node.js 20.9+ (recommended: nvm), then rerun bash start-dev.sh."
+command -v npm >/dev/null 2>&1 || fail "npm is not installed or is not on PATH."
 command -v docker >/dev/null 2>&1 || fail "Docker is required for local Postgres/Redis. Start Docker Desktop and run this again."
 
 NODE_MAJOR="$(node -p 'Number(process.versions.node.split(".")[0])')"
 NODE_VERSION="$(node -p 'process.versions.node')"
 if [ "$NODE_MAJOR" -lt 20 ]; then
-  fail "Node.js $NODE_VERSION is too old. Install Node.js 20.9+ and run this again."
+  fail "Node.js $NODE_VERSION is too old for this project. Use Node.js 20.9+ and rerun bash start-dev.sh."
 fi
 
+log "Using Node.js $NODE_VERSION ($(command -v node)) and npm $(npm --version)."
 if [ ! -f .env ]; then
   log ".env not found; creating a development .env from .env.example."
   cp .env.example .env
