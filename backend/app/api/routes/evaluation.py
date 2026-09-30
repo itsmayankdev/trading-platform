@@ -11,6 +11,7 @@ from backend.app.models.candle import Candle
 from backend.app.repositories.instrument import InstrumentRepository
 from pattern_engine.ranking import PatternRanker
 from pattern_engine.retrieval.numerical import NumericalWindowStore
+from backend.app.services.numerical_cache import numerical_store_key, prepared_numerical_cache
 from pattern_engine.window import CandlePoint, PatternWindow
 from workers.ingestion.on_demand import ensure_market_data
 
@@ -66,7 +67,16 @@ def evaluation(request: Request, symbol:str=Query(default="ETHUSDT",min_length=1
         return regime_cache[index]
     for current_end in checkpoint_indices:
         current_start=current_end-pattern_length+1; current=_window(rows,current_start,pattern_length,symbol,timeframe); current_regime=regime_at(current_end); checkpoint_rows=rows[:current_end+1]
-        store=NumericalWindowStore.from_columns(timestamps=[r.timestamp for r in checkpoint_rows],closes=[r.close for r in checkpoint_rows],window_length=pattern_length)
+        numerical_key = numerical_store_key(instrument.id, timeframe, checkpoint_rows, pattern_length)
+        store, _ = prepared_numerical_cache.get_or_build(
+            numerical_key,
+            builder=lambda: NumericalWindowStore.from_columns(
+                timestamps=[r.timestamp for r in checkpoint_rows],
+                closes=[r.close for r in checkpoint_rows],
+                window_length=pattern_length,
+            ),
+            estimated_bytes=lambda value: value.estimated_bytes(),
+        )
         matches=ranker.rank_numerical_v1(current=current,store=store,top_k=top_k,min_separation_candles=pattern_length); top_rows=[]
         for match in matches:
             match_end=timestamp_to_index.get(match.end_time)
