@@ -9,12 +9,44 @@ from backend.app.repositories.candle import CandleRepository
 from backend.app.repositories.instrument import InstrumentRepository
 from market_data.interface import Candle as MarketCandle
 from market_data.providers.binance import BinanceProvider
+from backend.app.services.market_state import MarketStateService
 from workers.ingestion.on_demand import ensure_market_data, refresh_latest_market_candle
 from workers.ingestion.yahoo_on_demand import ensure_yahoo_market_data
 
 router = APIRouter(prefix="/api/v1", tags=["candles"])
 candle_repository = CandleRepository()
 instrument_repository = InstrumentRepository()
+
+
+def _latest_candle_state(db: Session, instrument_id: int, symbol: str, timeframe: str) -> dict | None:
+    rows = candle_repository.get_candles(
+        db=db,
+        instrument_id=instrument_id,
+        timeframe=timeframe,
+        limit=1,
+    )
+    if not rows:
+        return None
+    candle = rows[-1]
+    return {
+        "time": int(candle.timestamp.replace(tzinfo=timezone.utc).timestamp()),
+        "open": candle.open,
+        "high": candle.high,
+        "low": candle.low,
+        "close": candle.close,
+        "volume": candle.volume,
+    }
+
+
+def _refresh_and_read_latest(
+    db: Session,
+    instrument_id: int,
+    symbol: str,
+    timeframe: str,
+) -> dict | None:
+    refresh_latest_market_candle(symbol=symbol, timeframe=timeframe)
+    db.expire_all()
+    return _latest_candle_state(db, instrument_id, symbol, timeframe)
 
 
 def _normalize_db_datetime(value: datetime | None) -> datetime | None:
@@ -119,10 +151,28 @@ def get_candles(
         raise HTTPException(status_code=404, detail=f"Instrument not found: {symbol}")
 
     try:
-        # Live chart requests refresh only the currently forming Binance candle.
-        # This keeps the visible chart current without starting a long history job.
+        # Live chart requests use a shared Redis state/refresh coordinator.
+        # Only the lock owner can call Binance; contending requests use the same
+        # cached state or fall back to PostgreSQL without calling the provider.
+        latest_market_state = None
         if start_time is None and end_time is None and instrument.provider == "binance":
-            refresh_latest_market_candle(symbol=symbol, timeframe=timeframe)
+            refresh_result = MarketStateService.get_or_refresh(
+                symbol=symbol,
+                timeframe=timeframe,
+                refresh=lambda: _refresh_and_read_latest(
+                    db=db,
+                    instrument_id=instrument.id,
+                    symbol=symbol,
+                    timeframe=timeframe,
+                ),
+                fallback=lambda: _latest_candle_state(
+                    db=db,
+                    instrument_id=instrument.id,
+                    symbol=symbol,
+                    timeframe=timeframe,
+                ),
+            )
+            latest_market_state = refresh_result.state.candle if refresh_result.state else None
 
         # Query the requested range directly. Both live and bounded chart paths
         # need only the candles they render; the ingestion scheduler owns long
@@ -214,6 +264,41 @@ def get_candles(
                 start_time=start_time,
                 end_time=end_time,
             )
+
+        # The latest candle is shared through Redis, but historical candles remain
+        # PostgreSQL-backed. Merge the compact shared state into the response so
+        # every concurrent chart sees the same current candle without reading a
+        # provider independently.
+        if latest_market_state is not None:
+            latest_time = int(latest_market_state["time"])
+            replaced = False
+            for index, candle in enumerate(candles):
+                candle_time = int(candle.timestamp.replace(tzinfo=timezone.utc).timestamp())
+                if candle_time == latest_time:
+                    candles[index] = MarketCandle(
+                        timestamp=candle.timestamp,
+                        open=latest_market_state["open"],
+                        high=latest_market_state["high"],
+                        low=latest_market_state["low"],
+                        close=latest_market_state["close"],
+                        volume=latest_market_state["volume"],
+                    )
+                    replaced = True
+                    break
+            if not replaced:
+                latest_timestamp = datetime.fromtimestamp(latest_time, tz=timezone.utc).replace(tzinfo=None)
+                candles.append(
+                    MarketCandle(
+                        timestamp=latest_timestamp,
+                        open=latest_market_state["open"],
+                        high=latest_market_state["high"],
+                        low=latest_market_state["low"],
+                        close=latest_market_state["close"],
+                        volume=latest_market_state["volume"],
+                    )
+                )
+                candles.sort(key=lambda item: item.timestamp)
+
     except HTTPException:
         raise
     except ValueError as exc:
