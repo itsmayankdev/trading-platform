@@ -216,7 +216,8 @@ class PatternSearchService:
         match_scores = [match.similarity_score for match in matches]
         intervals = [(timestamps[i + 1] - timestamps[i]).total_seconds() for i in range(min(len(timestamps) - 1, 1000)) if (timestamps[i + 1] - timestamps[i]).total_seconds() > 0]
         diagnostics = build_match_diagnostics(starts=match_starts, scores=match_scores, pattern_length=pattern_length, candle_interval_seconds=median(intervals) if intervals else 60.0)
-        mark("statistics", started)
+        mark("diagnostics", started)
+        started = time.perf_counter()
         response = {"symbol": symbol, "timeframe": timeframe, "pattern_length": pattern_length, "algorithm_version": ranker.algorithm.version, "feature_version": ranker.algorithm.feature_version, "current_pattern": {"start_time": _utc(current.start_time), "end_time": _utc(current.end_time)}, "matches": match_results, "statistics": [{"horizon_candles": s.horizon_candles, "sample_size": s.sample_size, "mean_return": s.mean_return, "median_return": s.median_return, "win_rate": s.win_rate, "mean_mfe": s.mean_mfe, "mean_mae": s.mean_mae} for s in statistics], "forward_paths": forward_paths, "quality_diagnostics": diagnostics}
         mark("response_build", started)
         _put_cached_result(result_key, latest_timestamp, latest_close, response)
