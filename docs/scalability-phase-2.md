@@ -58,9 +58,9 @@ The new cache is an in-process bounded LRU/TTL cache implemented in backend/app/
 
 Limits are configuration-driven:
 - CALC_CACHE_ENABLED=true
-- CALC_CACHE_MAX_ENTRIES=8
+- CALC_CACHE_MAX_ENTRIES=4
 - CALC_CACHE_TTL_SECONDS=60
-- CALC_CACHE_MAX_BYTES=268435456 (256 MiB)
+- CALC_CACHE_MAX_BYTES=134217728 (128 MiB)
 - CALC_PREPARE_LOCK_TIMEOUT_SECONDS=5
 
 An individual prepared store larger than the byte budget is not cached.
