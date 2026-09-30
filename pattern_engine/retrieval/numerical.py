@@ -19,6 +19,8 @@ class NumericalWindowStore:
             raise ValueError("Not enough candles for requested window length")
         self.timestamps = np.asarray([c.timestamp for c in candles], dtype=object)
         self.close = np.asarray([c.close for c in candles], dtype=np.float64)
+        self.timestamps.flags.writeable = False
+        self.close.flags.writeable = False
         self.window_length = window_length
         self.window_count = len(candles) - window_length + 1
 
@@ -33,6 +35,8 @@ class NumericalWindowStore:
         store = cls.__new__(cls)
         store.timestamps = np.asarray(timestamps, dtype=object)
         store.close = np.asarray(closes, dtype=np.float64)
+        store.timestamps.flags.writeable = False
+        store.close.flags.writeable = False
         store.window_length = window_length
         store.window_count = len(closes) - window_length + 1
         return store
@@ -168,3 +172,8 @@ class NumericalWindowStore:
 
 def build_numerical_store(candles: list[CandlePoint], window_length: int) -> NumericalWindowStore:
     return NumericalWindowStore(candles, window_length)
+
+
+    def estimated_bytes(self) -> int:
+        """Approximate retained NumPy/object-array memory for cache budgeting."""
+        return int(self.timestamps.nbytes + self.close.nbytes)
