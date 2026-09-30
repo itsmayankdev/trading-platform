@@ -15,6 +15,7 @@ from workers.ingestion.on_demand import ensure_market_data
 
 from pattern_engine.retrieval.numerical import NumericalWindowStore
 from backend.app.services.numerical_cache import numerical_store_key, prepared_numerical_cache
+from backend.app.core.market_metrics import increment
 from pattern_engine.window import CandlePoint, PatternWindow
 from pattern_engine.ranking import PatternRanker
 from pattern_engine.outcomes import calculate_outcomes
@@ -139,6 +140,7 @@ class PatternSearchService:
             if profile:
                 timings[name] = time.perf_counter() - started
 
+        request_started = time.perf_counter()
         started = time.perf_counter()
         ensure_market_data(symbol, timeframe, pattern_length + 1, background_history=False)
         mark("warmup_check", started)
@@ -147,6 +149,7 @@ class PatternSearchService:
         mark("numerical_db_load", started)
         if len(rows) < pattern_length + 1:
             raise ValueError("Market data is still warming up; please retry in a moment")
+        increment("numerical_rows_cache_hit" if cache_hit else "numerical_rows_cache_miss")
 
         latest_timestamp, latest_close = rows[-1].timestamp, rows[-1].close
         ranker = PatternRanker()
@@ -155,8 +158,10 @@ class PatternSearchService:
         if cached_result is not None:
             return cached_result
 
+        started = time.perf_counter()
         timestamps = [row.timestamp for row in rows]
         closes = [row.close for row in rows]
+        mark("array_conversion", started)
         timestamp_to_index = {timestamp: index for index, timestamp in enumerate(timestamps)}
         started = time.perf_counter()
         current = _window_from_rows(symbol, timeframe, rows, len(rows) - pattern_length, pattern_length)
@@ -178,6 +183,7 @@ class PatternSearchService:
             estimated_bytes=lambda value: value.estimated_bytes(),
         )
         mark("numerical_store", started)
+        increment("numerical_store_cache_hit" if numerical_cache_hit else "numerical_store_cache_miss")
         started = time.perf_counter()
         matches = ranker.rank_numerical_v1(current=current, store=store, top_k=top_k, min_separation_candles=pattern_length)
         mark("ranking", started)
@@ -204,14 +210,18 @@ class PatternSearchService:
 
         started = time.perf_counter()
         statistics = calculate_statistics(all_outcomes)
+        mark("statistics", started)
+        started = time.perf_counter()
         match_starts = [match.start_time for match in matches]
         match_scores = [match.similarity_score for match in matches]
         intervals = [(timestamps[i + 1] - timestamps[i]).total_seconds() for i in range(min(len(timestamps) - 1, 1000)) if (timestamps[i + 1] - timestamps[i]).total_seconds() > 0]
         diagnostics = build_match_diagnostics(starts=match_starts, scores=match_scores, pattern_length=pattern_length, candle_interval_seconds=median(intervals) if intervals else 60.0)
+        mark("statistics", started)
         response = {"symbol": symbol, "timeframe": timeframe, "pattern_length": pattern_length, "algorithm_version": ranker.algorithm.version, "feature_version": ranker.algorithm.feature_version, "current_pattern": {"start_time": _utc(current.start_time), "end_time": _utc(current.end_time)}, "matches": match_results, "statistics": [{"horizon_candles": s.horizon_candles, "sample_size": s.sample_size, "mean_return": s.mean_return, "median_return": s.median_return, "win_rate": s.win_rate, "mean_mfe": s.mean_mfe, "mean_mae": s.mean_mae} for s in statistics], "forward_paths": forward_paths, "quality_diagnostics": diagnostics}
         mark("response_build", started)
         _put_cached_result(result_key, latest_timestamp, latest_close, response)
         if profile:
             total = sum(timings.values())
-            print("PATTERN_SEARCH_PROFILE " + " ".join(f"{name}={value:.4f}s" for name, value in timings.items()) + f" row_cache_hit={cache_hit} numerical_cache_hit={numerical_cache_hit} candles={len(rows)} stages={total:.4f}s", flush=True)
+            total_elapsed = time.perf_counter() - request_started
+            print("PATTERN_SEARCH_PROFILE " + " ".join(f"{name}={value:.4f}s" for name, value in timings.items()) + f" row_cache_hit={cache_hit} numerical_cache_hit={numerical_cache_hit} candles={len(rows)} numerical_bytes={store.estimated_bytes()} total_pattern_search={total_elapsed:.4f}s stages={total:.4f}s", flush=True)
         return response
