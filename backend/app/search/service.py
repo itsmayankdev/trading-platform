@@ -14,6 +14,7 @@ from backend.app.models.candle import Candle
 from workers.ingestion.on_demand import ensure_market_data
 
 from pattern_engine.retrieval.numerical import NumericalWindowStore
+from backend.app.services.numerical_cache import numerical_store_key, prepared_numerical_cache
 from pattern_engine.window import CandlePoint, PatternWindow
 from pattern_engine.ranking import PatternRanker
 from pattern_engine.outcomes import calculate_outcomes
@@ -43,29 +44,58 @@ _CACHE_LOCK = Lock()
 def _cached_numerical_rows(instrument_id: int, timeframe: str) -> tuple[tuple, bool]:
     key = (instrument_id, timeframe)
     now = time.monotonic()
-    with _CACHE_LOCK:
-        cached = _NUMERICAL_CACHE.get(key)
-        if cached is not None:
-            cached_at, cached_timestamp, cached_close, cached_rows = cached
-            if now - cached_at <= _CACHE_TTL_SECONDS:
-                _NUMERICAL_CACHE.move_to_end(key)
-                return cached_rows, True
 
     with SessionLocal() as db:
-        latest = db.execute(select(Candle.timestamp, Candle.close).where(Candle.instrument_id == instrument_id, Candle.timeframe == timeframe).order_by(desc(Candle.timestamp)).limit(1)).first()
+        latest = db.execute(
+            select(
+                Candle.timestamp,
+                Candle.open,
+                Candle.high,
+                Candle.low,
+                Candle.close,
+                Candle.volume,
+            )
+            .where(Candle.instrument_id == instrument_id, Candle.timeframe == timeframe)
+            .order_by(desc(Candle.timestamp))
+            .limit(1)
+        ).first()
         if latest is None:
             return (), False
-        latest_timestamp, latest_close = latest
+
+        latest_version = (
+            latest.timestamp,
+            latest.open,
+            latest.high,
+            latest.low,
+            latest.close,
+            latest.volume,
+        )
+
         with _CACHE_LOCK:
             cached = _NUMERICAL_CACHE.get(key)
             if cached is not None:
-                cached_at, cached_timestamp, cached_close, cached_rows = cached
-                if now - cached_at <= _CACHE_TTL_SECONDS:
+                cached_at, cached_version, cached_rows = cached
+                if now - cached_at <= _CACHE_TTL_SECONDS and cached_version == latest_version:
                     _NUMERICAL_CACHE.move_to_end(key)
                     return cached_rows, True
-        rows = tuple(db.execute(select(Candle.timestamp, Candle.open, Candle.high, Candle.low, Candle.close, Candle.volume).where(Candle.instrument_id == instrument_id, Candle.timeframe == timeframe).order_by(Candle.timestamp.asc())).all())
+                _NUMERICAL_CACHE.pop(key, None)
+
+        rows = tuple(
+            db.execute(
+                select(
+                    Candle.timestamp,
+                    Candle.open,
+                    Candle.high,
+                    Candle.low,
+                    Candle.close,
+                    Candle.volume,
+                )
+                .where(Candle.instrument_id == instrument_id, Candle.timeframe == timeframe)
+                .order_by(Candle.timestamp.asc())
+            ).all()
+        )
         with _CACHE_LOCK:
-            _NUMERICAL_CACHE[key] = (now, latest_timestamp, latest_close, rows)
+            _NUMERICAL_CACHE[key] = (now, latest_version, rows)
             _NUMERICAL_CACHE.move_to_end(key)
             while len(_NUMERICAL_CACHE) > _CACHE_MAX_ENTRIES:
                 _NUMERICAL_CACHE.popitem(last=False)
@@ -132,7 +162,21 @@ class PatternSearchService:
         current = _window_from_rows(symbol, timeframe, rows, len(rows) - pattern_length, pattern_length)
         mark("current_pattern", started)
         started = time.perf_counter()
-        store = NumericalWindowStore.from_columns(timestamps=timestamps, closes=closes, window_length=pattern_length)
+        numerical_key = numerical_store_key(
+            instrument_id=instrument_id,
+            timeframe=timeframe,
+            rows=rows,
+            window_length=pattern_length,
+        )
+        store, numerical_cache_hit = prepared_numerical_cache.get_or_build(
+            numerical_key,
+            builder=lambda: NumericalWindowStore.from_columns(
+                timestamps=timestamps,
+                closes=closes,
+                window_length=pattern_length,
+            ),
+            estimated_bytes=lambda value: value.estimated_bytes(),
+        )
         mark("numerical_store", started)
         started = time.perf_counter()
         matches = ranker.rank_numerical_v1(current=current, store=store, top_k=top_k, min_separation_candles=pattern_length)
@@ -169,5 +213,5 @@ class PatternSearchService:
         _put_cached_result(result_key, latest_timestamp, latest_close, response)
         if profile:
             total = sum(timings.values())
-            print("PATTERN_SEARCH_PROFILE " + " ".join(f"{name}={value:.4f}s" for name, value in timings.items()) + f" cache_hit={cache_hit} candles={len(rows)} stages={total:.4f}s", flush=True)
+            print("PATTERN_SEARCH_PROFILE " + " ".join(f"{name}={value:.4f}s" for name, value in timings.items()) + f" row_cache_hit={cache_hit} numerical_cache_hit={numerical_cache_hit} candles={len(rows)} stages={total:.4f}s", flush=True)
         return response
