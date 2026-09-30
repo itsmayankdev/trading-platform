@@ -10,6 +10,14 @@ class Settings(BaseSettings):
     database_url: str
     redis_url: str
 
+    # Phase 2 numerical preparation cache. Keep large numerical arrays local to
+    # each API process; Redis is intentionally not used for these objects.
+    calc_cache_enabled: bool = True
+    calc_cache_max_entries: int = 8
+    calc_cache_ttl_seconds: float = 60.0
+    calc_cache_max_bytes: int = 268435456
+    calc_prepare_lock_timeout_seconds: float = 5.0
+
     binance_api_key: str = ""
     binance_api_secret: str = ""
 
