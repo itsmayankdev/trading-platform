@@ -135,7 +135,7 @@ class MarketStateService:
             return False
 
     @classmethod
-    def _acquire_lock(cls, symbol: str, timeframe: str, token: str) -> bool:
+    def _acquire_lock(cls, symbol: str, timeframe: str, token: str) -> bool | None:
         try:
             return bool(
                 cls._redis().set(
@@ -147,7 +147,7 @@ class MarketStateService:
             )
         except redis.RedisError as exc:
             cls._log_redis_failure("lock_acquire", exc)
-            return False
+            return None
 
     @classmethod
     def _release_lock(cls, symbol: str, timeframe: str, token: str) -> None:
@@ -208,7 +208,11 @@ class MarketStateService:
             return RefreshResult(cached, True, False, False, False, redis_available)
 
         token = uuid.uuid4().hex
-        if cls._acquire_lock(symbol, timeframe, token):
+        lock_acquired = cls._acquire_lock(symbol, timeframe, token)
+        if lock_acquired is None:
+            fallback_state = cls._state_from_mapping(symbol, timeframe, fallback())
+            return RefreshResult(fallback_state, False, False, False, False, False)
+        if lock_acquired:
             logger.info("market_refresh_lock_acquired symbol=%s timeframe=%s", symbol, timeframe)
             try:
                 # Another process can populate the cache between the initial
