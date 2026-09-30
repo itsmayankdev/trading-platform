@@ -8,6 +8,7 @@ from backend.app.db.session import get_db
 from backend.app.models.candle import Candle
 from backend.app.repositories.instrument import InstrumentRepository
 from pattern_engine.retrieval.numerical import NumericalWindowStore
+from backend.app.services.numerical_cache import numerical_store_key, prepared_numerical_cache
 from pattern_engine.ranking import PatternRanker
 from pattern_engine.window import CandlePoint, PatternWindow
 from workers.ingestion.on_demand import ensure_market_data
@@ -30,7 +31,16 @@ def replay_search(request: Request, symbol: str = Query(default="ETHUSDT", min_l
     if len(rows) < pattern_length + 1: raise HTTPException(status_code=400, detail="Not enough completed candles before replay time")
     timestamps, closes = [r.timestamp for r in rows], [r.close for r in rows]
     current_rows = rows[-pattern_length:]
-    store = NumericalWindowStore.from_columns(timestamps=timestamps, closes=closes, window_length=pattern_length)
+    numerical_key = numerical_store_key(instrument.id, timeframe, rows, pattern_length)
+    store, _ = prepared_numerical_cache.get_or_build(
+        numerical_key,
+        builder=lambda: NumericalWindowStore.from_columns(
+            timestamps=timestamps,
+            closes=closes,
+            window_length=pattern_length,
+        ),
+        estimated_bytes=lambda value: value.estimated_bytes(),
+    )
     current_start, current_end = current_rows[0].timestamp, current_rows[-1].timestamp
     current = PatternWindow(symbol=symbol, timeframe=timeframe, start_time=current_start, end_time=current_end, candles=tuple(CandlePoint(timestamp=r.timestamp, open=r.open, high=r.high, low=r.low, close=r.close, volume=r.volume) for r in current_rows))
     matches = PatternRanker().rank_numerical_v1(current=current, store=store, top_k=top_k, min_separation_candles=pattern_length)
