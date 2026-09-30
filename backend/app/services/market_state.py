@@ -11,6 +11,7 @@ from typing import Any, Callable, Mapping
 import redis
 
 from backend.app.core.config import get_settings
+from backend.app.core.market_metrics import increment
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +88,7 @@ class MarketStateService:
         # Avoid turning a Redis outage into one warning per chart request.
         if now - cls._redis_failure_logged_at >= 30:
             cls._redis_failure_logged_at = now
+            increment("redis_errors")
             logger.warning("market_state_redis_error operation=%s error=%s", operation, exc)
 
     @classmethod
@@ -204,21 +206,25 @@ class MarketStateService:
 
         cached = cls.get_latest(symbol, timeframe)
         if cached is not None:
+            increment("market_cache_hit")
             logger.debug("market_cache_hit symbol=%s timeframe=%s", symbol, timeframe)
             return RefreshResult(cached, True, False, False, False, redis_available)
 
+        increment("market_cache_miss")
         token = uuid.uuid4().hex
         lock_acquired = cls._acquire_lock(symbol, timeframe, token)
         if lock_acquired is None:
             fallback_state = cls._state_from_mapping(symbol, timeframe, fallback())
             return RefreshResult(fallback_state, False, False, False, False, False)
         if lock_acquired:
+            increment("refresh_lock_acquired")
             logger.info("market_refresh_lock_acquired symbol=%s timeframe=%s", symbol, timeframe)
             try:
                 # Another process can populate the cache between the initial
                 # read and lock acquisition.
                 cached = cls.get_latest(symbol, timeframe)
                 if cached is not None:
+                    increment("market_cache_hit")
                     return RefreshResult(cached, True, True, False, False, redis_available)
 
                 started = time.perf_counter()
@@ -227,6 +233,7 @@ class MarketStateService:
                 if refreshed is not None:
                     state = cls._state_from_mapping(symbol, timeframe, refreshed)
                     cls.set_latest(state)
+                    increment("provider_refresh_performed")
                     logger.info(
                         "market_provider_refresh symbol=%s timeframe=%s latency_ms=%.1f",
                         symbol,
@@ -240,11 +247,13 @@ class MarketStateService:
             finally:
                 cls._release_lock(symbol, timeframe, token)
 
+        increment("refresh_lock_contention")
         logger.info("market_refresh_lock_contention symbol=%s timeframe=%s", symbol, timeframe)
         for _ in range(WAIT_ATTEMPTS):
             time.sleep(WAIT_SECONDS)
             cached = cls.get_latest(symbol, timeframe)
             if cached is not None:
+                increment("provider_refresh_skipped")
                 logger.debug("market_refresh_skipped symbol=%s timeframe=%s", symbol, timeframe)
                 return RefreshResult(cached, False, False, True, False, redis_available)
 
