@@ -37,7 +37,7 @@ _CACHE_MAX_ENTRIES = 16
 _CACHE_TTL_SECONDS = 60.0
 _RESULT_CACHE_MAX_ENTRIES = 24
 _RESULT_CACHE_TTL_SECONDS = 20.0
-_NUMERICAL_CACHE: OrderedDict[tuple[int, str], tuple[float, object, object, tuple]] = OrderedDict()
+_NUMERICAL_CACHE: OrderedDict[tuple[int, str], tuple[float, tuple, tuple]] = OrderedDict()
 _RESULT_CACHE: OrderedDict[tuple[int, str, int, int, str], tuple[float, object, object, dict]] = OrderedDict()
 _CACHE_LOCK = Lock()
 
